@@ -16,7 +16,7 @@ const GAME = {
   wave: 1,
   elapsed: 0,
   kills: 0,
-  unlocks: ['fireball', 'wall'],
+  unlocks: ['fireball', 'wall', 'frost', 'bolt'],
   globalCooldown: 0,
   gameOver: false,
 };
@@ -423,10 +423,6 @@ function castFromConfig(spell) {
   }
 
   const archetype = String(spell.archetype || 'projectile');
-  if (!isArchetypeUnlocked(archetype)) {
-    setToast(`Archetype not unlocked: ${archetype}`);
-    return false;
-  }
 
   const cost = spell.cost || {};
   const manaCost = clamp(Number(cost.mana || 12), 8, 65);
@@ -460,19 +456,6 @@ function castFromConfig(spell) {
   spellCooldowns.set(archetype, cooldown);
   GAME.globalCooldown = 0.2;
   refreshHud();
-  return true;
-}
-
-function isArchetypeUnlocked(archetype) {
-  if (archetype === 'chain') {
-    return GAME.unlocks.includes('bolt');
-  }
-  if (archetype === 'zone_control') {
-    return GAME.unlocks.includes('wall');
-  }
-  if (archetype === 'aoe_burst') {
-    return GAME.unlocks.includes('fireball');
-  }
   return true;
 }
 
@@ -974,15 +957,7 @@ function updateSpawning(dt) {
 }
 
 function tryUnlockSpell() {
-  if (GAME.wave === 3 && !GAME.unlocks.includes('frost')) {
-    GAME.unlocks.push('frost');
-    setToast('Unlocked spell: frost');
-  }
-
-  if (GAME.wave === 6 && !GAME.unlocks.includes('bolt')) {
-    GAME.unlocks.push('bolt');
-    setToast('Unlocked spell: bolt');
-  }
+  // Unlock progression removed: all core spells are available from wave 1.
 }
 
 function updateEnemies(dt) {

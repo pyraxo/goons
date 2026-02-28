@@ -92,12 +92,8 @@ function normalizeUnlocks(unlocks) {
   return new Set(value);
 }
 
-function allowedArchetypes(unlocks) {
-  const set = new Set(['projectile']);
-  if (unlocks.has('fireball')) set.add('aoe_burst');
-  if (unlocks.has('wall')) set.add('zone_control');
-  if (unlocks.has('bolt')) set.add('chain');
-  return set;
+function allowedArchetypes() {
+  return new Set(ARCHETYPES);
 }
 
 function uniqueEffects(effects) {
@@ -172,8 +168,7 @@ function deriveCost(powerScore) {
 }
 
 function sanitizeDraft(draft, context, warnings) {
-  const unlocks = normalizeUnlocks(context.unlocks);
-  const archetypeSet = allowedArchetypes(unlocks);
+  const archetypeSet = allowedArchetypes();
 
   let archetype = typeof draft?.archetype === 'string' ? draft.archetype : 'projectile';
   if (!archetypeSet.has(archetype)) {
@@ -191,11 +186,6 @@ function sanitizeDraft(draft, context, warnings) {
   const singleTarget =
     typeof draft?.targeting?.singleTarget === 'boolean' ? draft.targeting.singleTarget : defaultSingleTarget;
   let pattern = singleTarget ? 'single_enemy' : requestedPattern;
-  if ((pattern === 'lane_circle' || pattern === 'lane_sweep') && !unlocks.has('wall')) {
-    warnings.push(`${pattern} unavailable before wall unlock; using single_enemy`);
-    pattern = 'single_enemy';
-  }
-
   const targeting = {
     mode: targetingMode,
     pattern,
@@ -227,20 +217,6 @@ function sanitizeDraft(draft, context, warnings) {
 
   let effects = uniqueEffects(draft?.effects).slice(0, 3);
 
-  if (effects.includes('freeze') && !unlocks.has('frost')) {
-    effects = effects.filter((effect) => effect !== 'freeze');
-    warnings.push('freeze removed because frost is locked');
-  }
-
-  if (archetype === 'chain' && !unlocks.has('bolt')) {
-    warnings.push('chain unavailable before bolt unlock; using aoe_burst');
-    archetype = 'aoe_burst';
-  }
-
-  if (archetype === 'zone_control' && !unlocks.has('wall')) {
-    warnings.push('zone_control unavailable before wall unlock; using projectile');
-    archetype = 'projectile';
-  }
   if (archetype !== 'zone_control' && (targeting.pattern === 'lane_circle' || targeting.pattern === 'lane_sweep')) {
     targeting.pattern = 'single_enemy';
     targeting.singleTarget = true;
@@ -446,16 +422,15 @@ function createPreset(name) {
 
 export function deterministicFallback(prompt, context) {
   const raw = String(prompt || '').toLowerCase();
-  const unlocks = normalizeUnlocks(context.unlocks);
 
   let presetName = 'default';
-  if (/(volcano|lava|magma|meteor|eruption|fire)/.test(raw) && unlocks.has('fireball')) {
+  if (/(volcano|lava|magma|meteor|eruption|fire)/.test(raw)) {
     presetName = 'fireball';
-  } else if (/(wall|barrier|block|fortify|stone)/.test(raw) && unlocks.has('wall')) {
+  } else if (/(wall|barrier|block|fortify|stone)/.test(raw)) {
     presetName = 'wall';
-  } else if (/(frost|freeze|ice|blizzard|glacier)/.test(raw) && unlocks.has('frost')) {
+  } else if (/(frost|freeze|ice|blizzard|glacier)/.test(raw)) {
     presetName = 'frost';
-  } else if (/(bolt|lightning|chain|thunder)/.test(raw) && unlocks.has('bolt')) {
+  } else if (/(bolt|lightning|chain|thunder)/.test(raw)) {
     presetName = 'bolt';
   }
 

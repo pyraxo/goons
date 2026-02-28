@@ -10,10 +10,7 @@ Top-down 3D endless horde prototype where you defend a base by typing free-text 
 - Enemies spawn across `5 lanes`
 - Goal: survive as long as possible; base HP reaching 0 ends run
 - Spells consume mana and use both global + per-spell cooldowns
-- Spell unlock progression:
-  - Start: `fireball`, `wall`
-  - Wave 3: `frost`
-  - Wave 6: `bolt`
+- All core spells are available from the start (`fireball`, `wall`, `frost`, `bolt`)
 
 ## Dynamic spell engine (v2)
 
