@@ -9,10 +9,8 @@ import {
   updatePoiseAndStagger,
 } from './combat/reaction-physics.js';
 import { disposeEnemyVisual, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
-import { estimatePrompt } from './prompt/costEstimator.js';
-import { MODEL_PRESET_MAP, PromptProcessor, REASONING_EFFORT_PRESET_MAP } from './prompt/promptProcessor.js';
-import { OPENAI_MODEL } from '../config.js';
-import { PROMPT_TEMPLATE_VERSION } from './prompt/templateDrafts.js';
+import { PromptProcessor } from './prompt/promptProcessor.js';
+
 
 const LANE_COUNT = 5;
 const LANE_SPACING = 8;
@@ -30,11 +28,6 @@ const COMMANDER_MIN_Z = CASTLE_WALL_FRONT_Z + CASTLE_WALL_DEPTH + 0.35;
 const COMMANDER_MAX_Z = BASE_Z + 4;
 const GOON_ATTACK_INTERVAL_SECONDS = 3;
 const GOON_ATTACK_DAMAGE = 1;
-const SPELL_API_TARGET_KEY = 'spellApiTarget';
-const SPELL_API_TARGETS = {
-  vite: 'vite',
-  backend: 'backend',
-};
 const DIRECT_SPELL_BACKEND_ORIGIN = import.meta.env.VITE_SPELL_BACKEND_ORIGIN || 'http://127.0.0.1:8787';
 const MAX_SPELL_HISTORY_ITEMS = 18;
 
@@ -98,12 +91,7 @@ const dom = {
   preview: document.getElementById('preview'),
   previewBody: document.getElementById('previewBody'),
   spellHistoryList: document.getElementById('spellHistoryList'),
-  promptInput: document.getElementById('promptInput'),
-  spellApiTarget: document.getElementById('spellApiTarget'),
-  modelPreset: document.getElementById('modelPreset'),
-  estimateBtn: document.getElementById('estimateBtn'),
-  applyBtn: document.getElementById('applyBtn'),
-  cancelSpellQueueBtn: document.getElementById('cancelSpellQueueBtn'),
+  spellInput: document.getElementById('spellInput'),
   toast: document.getElementById('toast'),
 };
 
@@ -167,9 +155,7 @@ const promptProcessor = new PromptProcessor(
     refundReservedGold,
   },
   {
-    onQueueUpdated: (queueSize) => {
-      syncApplyButtonState();
-    },
+    onQueueUpdated: () => {},
     onStatus: () => {},
     onHistoryUpdated: () => {},
   },
@@ -178,8 +164,6 @@ const promptProcessor = new PromptProcessor(
   }
 );
 
-let lastEstimate = null;
-let estimateInFlight = false;
 let spawnTimer = 0;
 let waveTimer = 0;
 let lastTime = performance.now();
@@ -514,174 +498,23 @@ function closeCommand() {
 }
 
 function setupPromptUi() {
-  const savedSpellApiTarget = localStorage.getItem(SPELL_API_TARGET_KEY);
-  if (savedSpellApiTarget === SPELL_API_TARGETS.backend || savedSpellApiTarget === SPELL_API_TARGETS.vite) {
-    dom.spellApiTarget.value = savedSpellApiTarget;
-  }
-
-  dom.spellApiTarget.addEventListener('change', () => {
-    const selected = dom.spellApiTarget.value === SPELL_API_TARGETS.backend ? SPELL_API_TARGETS.backend : SPELL_API_TARGETS.vite;
-    localStorage.setItem(SPELL_API_TARGET_KEY, selected);
-    const targetText = selected === SPELL_API_TARGETS.backend ? 'Backend direct' : 'Vite proxy';
-    setToast(`Spell API target: ${targetText}`);
-  });
-
-  function submitPromptInputToSpellApi() {
-    const raw = dom.promptInput.value.trim();
-    if (!raw) {
+  function submitSpell() {
+    const raw = dom.spellInput.value.trim();
+    if (!raw || GAME.gameOver) {
       return;
     }
-    dom.promptInput.value = '';
-    lastEstimate = null;
-    dom.preview.hidden = true;
-    syncApplyButtonState();
+    dom.spellInput.value = '';
     void castFromPrompt(raw);
   }
 
-  dom.estimateBtn.addEventListener('click', async () => {
-    if (estimateInFlight) {
-      return;
-    }
-
-    if (isSpellApiBackendSelected()) {
-      submitPromptInputToSpellApi();
-      return;
-    }
-
-    const raw = dom.promptInput.value.trim();
-    if (!raw) {
-      return;
-    }
-
-    estimateInFlight = true;
-    dom.estimateBtn.disabled = true;
-    try {
-      lastEstimate = await estimatePrompt(raw);
-      renderEstimate(lastEstimate);
-    } catch (error) {
-      lastEstimate = null;
-      dom.preview.hidden = true;
-    } finally {
-      estimateInFlight = false;
-      dom.estimateBtn.disabled = false;
-      syncApplyButtonState();
-    }
-  });
-
-  dom.applyBtn.addEventListener('click', () => {
-    if (isSpellApiBackendSelected()) {
-      submitPromptInputToSpellApi();
-      return;
-    }
-
-    if (!lastEstimate) {
-      return;
-    }
-
-    if (!canSpendGold(lastEstimate.estimatedGoldCost)) {
-      syncApplyButtonState();
-      return;
-    }
-
-    const preset = dom.modelPreset.value;
-    promptProcessor.enqueue(lastEstimate, preset);
-    dom.promptInput.value = '';
-    lastEstimate = null;
-    dom.preview.hidden = true;
-    syncApplyButtonState();
-  });
-
-  dom.cancelSpellQueueBtn.addEventListener('click', () => {
-    cancelQueuedSpells();
-  });
-
-  function forceApplyFromPromptInput() {
-    if (isSpellApiBackendSelected()) {
-      submitPromptInputToSpellApi();
-      return;
-    }
-
-    const raw = dom.promptInput.value.trim();
-    if (!raw) {
-      return;
-    }
-
-    if (GAME.gameOver) {
-      return;
-    }
-
-    const preset = dom.modelPreset.value;
-    const envelope = {
-      id: `prompt_force_${Date.now()}`,
-      inputMode: 'text',
-      rawPrompt: raw,
-      classifiedTypes: ['actions'],
-      estimatedGoldCost: 0,
-      riskLevel: 'medium',
-      requiresReview: false,
-    };
-
-    promptProcessor.enqueue(envelope, preset);
-    dom.promptInput.value = '';
-    lastEstimate = null;
-    dom.preview.hidden = true;
-    syncApplyButtonState();
-  }
-
-  window.addEventListener('keydown', (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+  dom.spellInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
       event.preventDefault();
-      if (isSpellApiBackendSelected()) {
-        submitPromptInputToSpellApi();
-        return;
-      }
-      if (event.shiftKey) {
-        dom.estimateBtn.click();
-        return;
-      }
-      forceApplyFromPromptInput();
-    }
-  });
-
-  dom.promptInput.addEventListener('keydown', (event) => {
-    if (!isSpellApiBackendSelected()) {
-      return;
-    }
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      submitPromptInputToSpellApi();
+      submitSpell();
     }
   });
 
   renderSpellHistory();
-  syncSpellQueueUi();
-}
-
-function renderEstimate(estimate) {
-  const canAfford = canSpendGold(estimate.estimatedGoldCost);
-  const selectedPreset = dom.modelPreset.value;
-
-  dom.previewBody.innerHTML = `
-    <div><strong>Types:</strong> ${estimate.classifiedTypes.join(', ')}</div>
-    <div><strong>Risk:</strong> ${estimate.riskLevel}</div>
-    <div><strong>Cost:</strong> ${estimate.estimatedGoldCost} Gold</div>
-    <div><strong>Estimator:</strong> ${OPENAI_MODEL} (reasoning: low)</div>
-    <div><strong>Preset Model:</strong> ${MODEL_PRESET_MAP[selectedPreset]} (reasoning: ${REASONING_EFFORT_PRESET_MAP[selectedPreset]})</div>
-    <div><strong>Review Required:</strong> ${estimate.requiresReview ? 'yes' : 'no'}</div>
-    <div><strong>Can Afford:</strong> ${canAfford ? 'yes' : 'no'}</div>
-  `;
-
-  dom.preview.hidden = false;
-}
-
-function syncApplyButtonState() {
-  const canApply =
-    Boolean(lastEstimate) &&
-    !estimateInFlight &&
-    !resetInFlight &&
-    canSpendGold(lastEstimate.estimatedGoldCost) &&
-    !GAME.gameOver;
-  dom.applyBtn.disabled = !canApply;
 }
 
 function canSpendGold(amount) {
@@ -733,7 +566,6 @@ function getReservedGold() {
 async function castFromPrompt(rawPrompt) {
   const historyId = appendSpellHistory(rawPrompt);
   spellQueue.push({ rawPrompt, historyId });
-  syncSpellQueueUi();
   void processSpellQueue();
 }
 
@@ -746,7 +578,6 @@ async function processSpellQueue() {
   try {
     while (spellQueue.length > 0) {
       const next = spellQueue.shift();
-      syncSpellQueueUi();
       if (!next) {
         continue;
       }
@@ -754,7 +585,6 @@ async function processSpellQueue() {
     }
   } finally {
     spellQueueProcessing = false;
-    syncSpellQueueUi();
   }
 }
 
@@ -838,7 +668,6 @@ function cancelQueuedSpells() {
   }
 
   setToast('Queued spells cancelled');
-  syncSpellQueueUi();
 }
 
 async function resetSandboxToTemplate(reason) {
@@ -858,30 +687,11 @@ async function resetSandboxToTemplate(reason) {
     window.location.reload();
   } catch (error) {
     resetInFlight = false;
-    syncApplyButtonState();
   }
-}
-
-function syncSpellQueueUi() {
-  if (!dom.cancelSpellQueueBtn) {
-    return;
-  }
-
-  const queuedCount = spellQueue.length;
-  dom.cancelSpellQueueBtn.disabled = queuedCount === 0;
-  dom.cancelSpellQueueBtn.textContent =
-    queuedCount > 0 ? `Cancel Queue (${queuedCount})` : 'Cancel Queue';
 }
 
 function getSpellGenerateEndpoint() {
-  if (dom.spellApiTarget.value === SPELL_API_TARGETS.backend) {
-    return `${DIRECT_SPELL_BACKEND_ORIGIN}/api/spells/generate`;
-  }
-  return '/api/spells/generate';
-}
-
-function isSpellApiBackendSelected() {
-  return dom.spellApiTarget.value === SPELL_API_TARGETS.backend;
+  return `${DIRECT_SPELL_BACKEND_ORIGIN}/api/spells/generate`;
 }
 
 function castFromConfig(spell) {
@@ -2867,7 +2677,6 @@ function updateHud() {
   dom.gold.textContent = Math.floor(GAME.gold).toLocaleString();
   dom.reservedGold.textContent = Math.floor(getReservedGold()).toLocaleString();
   dom.unlocks.textContent = GAME.unlocks.join(', ');
-  syncApplyButtonState();
 }
 
 function refreshHud() {

@@ -201,80 +201,34 @@ canvas {
   color: #b7cde8;
 }
 
-#promptBar {
+#spellBar {
   position: fixed;
   left: 50%;
   bottom: 24px;
   transform: translateX(-50%);
-  display: grid;
-  grid-template-columns: 1fr 190px 170px auto auto auto;
-  gap: 8px;
-  align-items: center;
   z-index: 35;
   padding: 10px 12px;
-  width: min(760px, calc(100vw - 24px));
+  width: min(600px, calc(100vw - 24px));
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   background: color-mix(in srgb, #091322 82%, #000);
   backdrop-filter: blur(5px);
 }
 
-#promptInput {
+#spellInput {
   width: 100%;
-  min-height: 42px;
-  max-height: 96px;
-  resize: vertical;
+  height: 42px;
   border-radius: 10px;
   border: 1px solid #355f8d;
   background: rgba(8, 17, 30, 0.92);
   color: #eaf4ff;
-  padding: 10px 12px;
+  padding: 10px 14px;
   outline: none;
-  font-size: 14px;
+  font-size: 15px;
 }
 
-#spellApiTarget,
-#modelPreset,
-#estimateBtn,
-#applyBtn,
-#cancelSpellQueueBtn {
-  min-height: 42px;
-  border-radius: 10px;
-  border: 1px solid #355f8d;
-  background: rgba(8, 17, 30, 0.92);
-  color: #eaf4ff;
-  font-size: 14px;
-  padding: 0 12px;
-}
-
-#estimateBtn,
-#applyBtn,
-#cancelSpellQueueBtn {
-  border: none;
-  cursor: pointer;
-  font-weight: 700;
-}
-
-#estimateBtn {
-  background: #3f72af;
-  color: #fff;
-}
-
-#applyBtn {
-  background: var(--accent);
-  color: #1a1d22;
-}
-
-#cancelSpellQueueBtn {
-  background: #a33f5f;
-  color: #fff;
-}
-
-#applyBtn:disabled,
-#cancelSpellQueueBtn:disabled {
-  background: #4f5460;
-  color: #9aa0ad;
-  cursor: not-allowed;
+#spellInput:focus {
+  border-color: #5ca6ff;
 }
 
 @media (max-width: 840px) {
@@ -299,15 +253,8 @@ canvas {
     bottom: auto;
   }
 
-  #promptBar {
-    grid-template-columns: 1fr;
+  #spellBar {
     width: calc(100vw - 20px);
     bottom: 14px;
-  }
-
-  #estimateBtn,
-  #applyBtn,
-  #cancelSpellQueueBtn {
-    width: 100%;
   }
 }
