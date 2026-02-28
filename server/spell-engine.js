@@ -4,6 +4,9 @@ const TARGET_MODES = ['nearest', 'nearest_enemy', 'lane', 'lane_cluster', 'groun
 const TARGET_PATTERNS = ['single_enemy', 'lane_circle', 'lane_sweep'];
 const EFFECTS = ['burn', 'freeze', 'stun', 'knockback', 'slow', 'shield_break'];
 const VFX_SHAPES = ['orb', 'ring', 'wall', 'arc', 'wave'];
+const TRAIL_EFFECTS = ['spark', 'smoke', 'frost_mist', 'lightning_arc', 'ember_trail', 'shadow_wisp', 'holy_motes', 'none'];
+const IMPACT_EFFECTS = ['explosion', 'shatter', 'ripple', 'flash', 'vortex', 'pillar', 'none'];
+const CAST_STYLES = ['launch', 'slam', 'channel', 'sweep', 'pulse'];
 
 const EFFECT_WEIGHTS = {
   burn: 10,
@@ -17,8 +20,20 @@ const EFFECT_WEIGHTS = {
 const TOOL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['archetype', 'element', 'targeting', 'numbers', 'effects', 'vfx', 'sfx'],
+  required: ['name', 'description', 'archetype', 'element', 'targeting', 'numbers', 'effects', 'vfx', 'sfx'],
   properties: {
+    name: {
+      type: 'string',
+      minLength: 2,
+      maxLength: 40,
+      description: 'A vivid, evocative spell name (e.g. "Cinderstorm Salvo", "Glacial Requiem", "Voltaic Cascade").',
+    },
+    description: {
+      type: 'string',
+      minLength: 8,
+      maxLength: 120,
+      description: 'One-sentence flavor text describing what the spell looks and feels like in combat.',
+    },
     archetype: { type: 'string', enum: ARCHETYPES },
     element: { type: 'string', enum: ELEMENTS },
     targeting: {
@@ -57,7 +72,7 @@ const TOOL_SCHEMA = {
     vfx: {
       type: 'object',
       additionalProperties: false,
-      required: ['palette', 'intensity', 'shape'],
+      required: ['palette', 'intensity', 'shape', 'primaryColor', 'secondaryColor', 'trailEffect', 'impactEffect'],
       properties: {
         palette: { type: 'string', minLength: 2, maxLength: 24 },
         intensity: { type: 'number', minimum: 0.2, maximum: 1.4 },
@@ -65,6 +80,38 @@ const TOOL_SCHEMA = {
         size: { type: 'number', minimum: 0.4, maximum: 2.2 },
         ringColor: { type: 'string', minLength: 3, maxLength: 16 },
         visibility: { type: 'number', minimum: 0.4, maximum: 2.2 },
+        primaryColor: {
+          type: 'string',
+          pattern: '^#[0-9a-fA-F]{6}$',
+          description: 'Hex color for the main body of the spell (e.g. "#ff6622" for molten orange).',
+        },
+        secondaryColor: {
+          type: 'string',
+          pattern: '^#[0-9a-fA-F]{6}$',
+          description: 'Hex accent color for glow, particles, and edges (e.g. "#ffcc00" for golden highlights).',
+        },
+        trailEffect: {
+          type: 'string',
+          enum: TRAIL_EFFECTS,
+          description: 'Particle trail left behind the spell as it travels.',
+        },
+        impactEffect: {
+          type: 'string',
+          enum: IMPACT_EFFECTS,
+          description: 'Visual burst when the spell hits or detonates.',
+        },
+        particleDensity: {
+          type: 'number',
+          minimum: 0.2,
+          maximum: 2.0,
+          description: 'How dense the particle effects are. 0.5=subtle, 1.0=normal, 2.0=spectacular.',
+        },
+        screenShake: {
+          type: 'number',
+          minimum: 0,
+          maximum: 1.0,
+          description: 'Camera shake on impact. 0=none, 0.3=light rumble, 0.7=heavy, 1.0=devastating.',
+        },
       },
     },
     sfx: {
@@ -74,6 +121,11 @@ const TOOL_SCHEMA = {
       properties: {
         cue: { type: 'string', minLength: 2, maxLength: 32 },
       },
+    },
+    castStyle: {
+      type: 'string',
+      enum: CAST_STYLES,
+      description: 'How the spell launches: launch=thrown forward, slam=ground impact, channel=sustained beam, sweep=wide arc, pulse=radial burst.',
     },
   },
 };
@@ -231,7 +283,30 @@ function sanitizeDraft(draft, context, warnings) {
   const visibility = clampNumber(draft?.vfx?.visibility ?? 1.0, 0.4, 2.2);
   const ringColor = sanitizeColorToken(draft?.vfx?.ringColor);
 
+  const primaryColor = sanitizeHexColor(draft?.vfx?.primaryColor) || defaultPrimaryColor(element);
+  const secondaryColor = sanitizeHexColor(draft?.vfx?.secondaryColor) || defaultSecondaryColor(element);
+  const trailEffect = TRAIL_EFFECTS.includes(draft?.vfx?.trailEffect)
+    ? draft.vfx.trailEffect
+    : defaultTrailForElement(element);
+  const impactEffect = IMPACT_EFFECTS.includes(draft?.vfx?.impactEffect)
+    ? draft.vfx.impactEffect
+    : defaultImpactForArchetype(archetype);
+  const particleDensity = clampNumber(draft?.vfx?.particleDensity ?? 1.0, 0.2, 2.0);
+  const screenShake = clampNumber(draft?.vfx?.screenShake ?? defaultScreenShake(archetype), 0, 1.0);
+  const castStyle = CAST_STYLES.includes(draft?.castStyle)
+    ? draft.castStyle
+    : defaultCastStyle(archetype);
+
+  const spellName = sanitizeText(draft?.name, defaultSpellName(archetype, element), 40);
+  const spellDescription = sanitizeFlavorText(
+    draft?.description,
+    `A ${element} ${archetype.replace('_', ' ')} spell.`,
+    120
+  );
+
   const spell = {
+    name: spellName,
+    description: spellDescription,
     archetype,
     element,
     targeting,
@@ -243,11 +318,18 @@ function sanitizeDraft(draft, context, warnings) {
       shape: vfxShape,
       size: vfxSize,
       visibility,
+      primaryColor,
+      secondaryColor,
+      trailEffect,
+      impactEffect,
+      particleDensity,
+      screenShake,
       ...(ringColor ? { ringColor } : {}),
     },
     sfx: {
       cue: sanitizeText(draft?.sfx?.cue, `${element}-cast`, 32),
     },
+    castStyle,
   };
 
   applyCompatibilityRules(spell, warnings);
@@ -369,60 +451,75 @@ export function validateAndFinalizeSpell(draft, context) {
 function createPreset(name) {
   if (name === 'fireball') {
     return {
+      name: 'Cinderstorm Salvo',
+      description: 'A roaring sphere of molten flame that erupts on impact, scorching everything nearby.',
       archetype: 'aoe_burst',
       element: 'fire',
       targeting: { mode: 'nearest', pattern: 'single_enemy', singleTarget: false },
       numbers: { damage: 60, radius: 3.4, durationSec: 0, speed: 32, width: 3, length: 4, laneSpan: 1 },
       effects: ['burn'],
-      vfx: { palette: 'ember', intensity: 1.0, shape: 'orb' },
+      vfx: { palette: 'ember', intensity: 1.0, shape: 'orb', primaryColor: '#ff4400', secondaryColor: '#ffaa00', trailEffect: 'ember_trail', impactEffect: 'explosion', particleDensity: 1.4, screenShake: 0.5 },
       sfx: { cue: 'fireburst' },
+      castStyle: 'launch',
     };
   }
 
   if (name === 'wall') {
     return {
+      name: 'Bulwark of Ruin',
+      description: 'A towering slab of enchanted stone erupts from the earth, halting all who approach.',
       archetype: 'zone_control',
       element: 'earth',
       targeting: { mode: 'lane', pattern: 'lane_circle', singleTarget: false },
       numbers: { damage: 10, radius: 2.0, durationSec: 8, tickRate: 0.8, width: 8, length: 5, laneSpan: 1 },
       effects: ['slow', 'knockback'],
-      vfx: { palette: 'stone', intensity: 0.7, shape: 'wall' },
+      vfx: { palette: 'stone', intensity: 0.7, shape: 'wall', primaryColor: '#8a7d6b', secondaryColor: '#c8a96e', trailEffect: 'smoke', impactEffect: 'ripple', particleDensity: 0.6, screenShake: 0.35 },
       sfx: { cue: 'bulwark' },
+      castStyle: 'slam',
     };
   }
 
   if (name === 'frost') {
     return {
+      name: 'Glacial Requiem',
+      description: 'A crystalline ring of absolute zero blooms outward, flash-freezing the battlefield.',
       archetype: 'zone_control',
       element: 'ice',
       targeting: { mode: 'front_cluster', pattern: 'lane_circle', singleTarget: false },
       numbers: { damage: 16, radius: 4.5, durationSec: 2.2, tickRate: 0.7, width: 10, length: 9, laneSpan: 2 },
       effects: ['freeze', 'slow'],
-      vfx: { palette: 'glacier', intensity: 0.9, shape: 'ring' },
+      vfx: { palette: 'glacier', intensity: 0.9, shape: 'ring', primaryColor: '#66ccff', secondaryColor: '#e0f0ff', trailEffect: 'frost_mist', impactEffect: 'shatter', particleDensity: 1.2, screenShake: 0.3 },
       sfx: { cue: 'frostwave' },
+      castStyle: 'pulse',
     };
   }
 
   if (name === 'bolt') {
     return {
+      name: 'Voltaic Cascade',
+      description: 'Crackling arcs of raw lightning leap between enemies in a blinding chain.',
       archetype: 'chain',
       element: 'storm',
       targeting: { mode: 'front_cluster', pattern: 'single_enemy', singleTarget: false },
       numbers: { damage: 42, radius: 2.3, durationSec: 0, chainCount: 4, width: 4, length: 6, laneSpan: 1 },
       effects: ['stun'],
-      vfx: { palette: 'ion', intensity: 1.1, shape: 'arc' },
+      vfx: { palette: 'ion', intensity: 1.1, shape: 'arc', primaryColor: '#88ddff', secondaryColor: '#ffffff', trailEffect: 'lightning_arc', impactEffect: 'flash', particleDensity: 1.6, screenShake: 0.25 },
       sfx: { cue: 'chainbolt' },
+      castStyle: 'pulse',
     };
   }
 
   return {
+    name: 'Arcane Missile',
+    description: 'A shimmering bolt of raw arcane energy that homes in on the nearest foe.',
     archetype: 'projectile',
     element: 'arcane',
     targeting: { mode: 'nearest', pattern: 'single_enemy', singleTarget: true },
     numbers: { damage: 32, radius: 2.0, durationSec: 0, speed: 28, width: 2, length: 3, laneSpan: 1 },
     effects: ['slow'],
-    vfx: { palette: 'astral', intensity: 0.8, shape: 'orb' },
+    vfx: { palette: 'astral', intensity: 0.8, shape: 'orb', primaryColor: '#b366ff', secondaryColor: '#e0b3ff', trailEffect: 'holy_motes', impactEffect: 'flash', particleDensity: 0.8, screenShake: 0.15 },
     sfx: { cue: 'arcane-shot' },
+    castStyle: 'launch',
   };
 }
 
@@ -460,6 +557,57 @@ function defaultSizeForArchetype(archetype) {
   if (archetype === 'zone_control') return 1.0;
   if (archetype === 'chain') return 0.85;
   return 1.0;
+}
+
+function defaultPrimaryColor(element) {
+  const map = { fire: '#ff6622', ice: '#66ccff', arcane: '#b366ff', earth: '#8ca85c', storm: '#88ddff' };
+  return map[element] || '#b366ff';
+}
+
+function defaultSecondaryColor(element) {
+  const map = { fire: '#ffcc00', ice: '#ffffff', arcane: '#e0b3ff', earth: '#c8a96e', storm: '#ffffff' };
+  return map[element] || '#e0b3ff';
+}
+
+function defaultTrailForElement(element) {
+  const map = { fire: 'ember_trail', ice: 'frost_mist', arcane: 'holy_motes', earth: 'smoke', storm: 'lightning_arc' };
+  return map[element] || 'spark';
+}
+
+function defaultImpactForArchetype(archetype) {
+  const map = { projectile: 'flash', aoe_burst: 'explosion', zone_control: 'ripple', chain: 'flash' };
+  return map[archetype] || 'flash';
+}
+
+function defaultScreenShake(archetype) {
+  const map = { projectile: 0.15, aoe_burst: 0.45, zone_control: 0.25, chain: 0.2 };
+  return map[archetype] || 0.15;
+}
+
+function defaultCastStyle(archetype) {
+  const map = { projectile: 'launch', aoe_burst: 'launch', zone_control: 'slam', chain: 'pulse' };
+  return map[archetype] || 'launch';
+}
+
+function defaultSpellName(archetype, element) {
+  const elementNames = { fire: 'Flame', ice: 'Frost', arcane: 'Arcane', earth: 'Stone', storm: 'Storm' };
+  const archetypeNames = { projectile: 'Bolt', aoe_burst: 'Blast', zone_control: 'Ward', chain: 'Arc' };
+  return `${elementNames[element] || 'Arcane'} ${archetypeNames[archetype] || 'Spell'}`;
+}
+
+function sanitizeFlavorText(value, fallback, maxLength) {
+  if (typeof value !== 'string') return fallback;
+  const cleaned = value.replace(/[^\w\s.,!?'-]/g, '').trim().slice(0, maxLength);
+  return cleaned || fallback;
+}
+
+function sanitizeHexColor(value) {
+  if (typeof value !== 'string') return null;
+  const cleaned = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(cleaned)) return cleaned;
+  if (/^[0-9a-f]{6}$/.test(cleaned)) return `#${cleaned}`;
+  if (/^0x[0-9a-f]{6}$/.test(cleaned)) return `#${cleaned.slice(2)}`;
+  return null;
 }
 
 function sanitizeText(value, fallback, maxLength) {
