@@ -1,38 +1,42 @@
-# Prompt Defense 3D (Three.js)
+# God of Goons (Three.js)
 
-Top-down 3D endless horde prototype where you defend a base by typing free-text prompts that map to spells.
+God of Goons is a top-down 3D horde-defense prototype with a prompt-driven sandbox loop.
+You still have classic spell casting, but prompts now target broader game layers:
 
-## Current gameplay (v1)
+- `ui` (widgets/panels/status affordances)
+- `mechanics` (rules/hooks/effects)
+- `units` (new entity definitions/roles)
+- `actions` (trigger/effect behaviors)
 
-- Commander movement: `WASD` near base
-- Open command bar: `Enter`
-- Submit prompt: `Enter`
-- Enemies spawn across `5 lanes`
-- Goal: survive as long as possible; base HP reaching 0 ends run
-- Spells consume mana and use both global + per-spell cooldowns
-- Spell unlock progression:
-  - Start: `fireball`, `wall`
-  - Wave 3: `frost`
-  - Wave 6: `bolt`
+## What changed recently
 
-## Free-text prompts
+- Prompt flow now uses `Estimate -> Queue -> Apply` with explicit Gold reservation/commit/refund.
+- Prompt artifacts are structured JSON (template `sandbox-v1`) instead of only ad-hoc spell mapping.
+- Replay history now records prompt type mix, artifact counts, and mechanic summaries.
+- Runtime safety work landed for bounded mechanic execution (`src/runtime/mechanicRuntime.js`) with:
+  - per-tick command budget
+  - per-mechanic runtime budget
+  - auto-disable on errors/budget violations
+- Enemy visuals were upgraded to sprite-based 3D billboard enemies with class variants.
 
-Prompt parser uses:
-1. Exact match (`fireball`)
-2. Word containment (`cast fireball now`)
-3. Fuzzy best-match (small typos)
+## Gameplay baseline
 
-Examples:
-- `fireball`
-- `spawn wall`
-- `freez all` -> likely `frost`
+- Move commander with `WASD`
+- Open command bar with `Enter`
+- Survive lane-based enemy waves and protect base HP
+- Cast baseline spells (`fireball`, `wall`, later `frost`, `bolt`)
+- Manage mana, cooldowns, and Gold for prompt-applied sandbox changes
 
-## Spell behavior
+## Prompt system (current shape)
 
-- `fireball`: auto-target nearest enemy, explodes with splash damage
-- `wall`: spawns in high-pressure lane to stall enemies
-- `frost`: freezes all enemies briefly
-- `bolt`: chain lightning damages several front enemies
+1. `/api/prompt/estimate` classifies prompt scope and estimates Gold cost/risk.
+2. Player confirms apply with a model preset (`fast`, `medium`, `high`).
+3. `/api/prompt/execute` returns a validated artifact payload:
+   - `summary`
+   - `classifiedTypes`
+   - `sandboxPatch` (`ui`, `mechanics`, `units`, `actions`, `resetToBaselineFirst`)
+   - `observability`
+4. Prompt processor updates queue state, replay history, and apply status.
 
 ## Run locally
 
@@ -41,51 +45,27 @@ npm install
 npm run dev
 ```
 
-Then open the local Vite URL (usually `http://localhost:5173`).
+Open [http://localhost:5173](http://localhost:5173).
 
-Create a `.env` file in the project root:
+Create `.env`:
 
 ```bash
 OPENAI_API_KEY=sk-...
 ```
 
-Prompt estimation now always runs through the fast model (`gpt-5.3-codex`, reasoning `low`) with structured JSON output.
+## Key files
 
-## Tune quickly
+- `src/main.js`: core game loop, HUD wiring, command/prompt UI, economy, waves
+- `src/prompt/costEstimator.js`: prompt type/cost/risk estimation client
+- `src/prompt/promptProcessor.js`: queueing, retries, apply history, Gold reservation flow
+- `src/prompt/templateDrafts.js`: artifact schema + system/user prompt templates
+- `src/runtime/commandSchema.js`: allowed runtime command contracts
+- `src/runtime/mechanicRuntime.js`: bounded, telemetry-aware mechanic execution
+- `src/enemy-models.js`: enemy visual loading/animation integration
+- `docs/architecture/dynamic-sandbox-runtime-plan.md`: forward plan for sandbox hardening
 
-Main constants and logic are in `src/main.js`:
-- Map/lane config (`LANE_COUNT`, spacing, base location)
-- Resource economy (`maxMana`, regen, spell costs)
-- Spawn pressure and difficulty scaling
-- Unlock thresholds and spell definitions
+## Tests
 
-## Enemy visual style
-
-Enemy rendering now uses 3D billboard sprites (character sprites in world space) through `src/enemy-models.js`.
-This keeps the top-down 3D gameplay but gives a more painterly/realistic look than low-poly meshes.
-
-## How to tune enemy visuals
-
-Sprite visual integration lives in `src/enemy-models.js` and reads scale/offset/shadow config from `public/models/enemies/manifest.json`.
-
-Required manifest fields (array entries):
-- `kind`: `melee`, `ranged`, or `tank`
-- `path`: reserved for future external assets
-- `scale`: numeric model scale multiplier
-- `yOffset`: vertical offset after load
-- `castsShadow`: boolean shadow toggle
-
-Runtime animation states used by the sprite animator:
-- `idle`
-- `run`
-- `hit`
-- `die`
-
-Model orientation and origin conventions:
-- Keep feet at `y=0` in bind pose
-- Face forward on `+Z`
-- Use low-poly budgets (target laptop 60 FPS): ~4k tris goblin/archer, ~7k tris ogre
-
-Licensing notes:
-- Keep source/license details in `public/models/enemies/LICENSES.md`
-- Included `.glb` files are generated prototypes and currently optional in sprite mode
+```bash
+npm run test
+```
