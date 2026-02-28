@@ -1,0 +1,118 @@
+import { compileMechanicArtifact, validateMechanicArtifact } from './mechanicsArtifact.js';
+
+function toArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizePatchCollections(artifact) {
+  const patch = artifact?.sandboxPatch ?? {};
+  return {
+    ui: toArray(patch.ui),
+    mechanics: toArray(patch.mechanics),
+    units: toArray(patch.units),
+    actions: toArray(patch.actions),
+  };
+}
+
+function compileMechanicsBranch(mechanics, primitiveRegistry, logger) {
+  const compiledMechanics = [];
+  const appliedMechanics = [];
+
+  for (const mechanic of mechanics) {
+    const validation = validateMechanicArtifact(mechanic, primitiveRegistry);
+    if (!validation.ok) {
+      logger?.warn?.('[sandbox] skipped mechanic', mechanic?.id ?? '<unknown>', validation.error);
+      continue;
+    }
+
+    try {
+      const compiled = compileMechanicArtifact(mechanic, primitiveRegistry);
+      compiledMechanics.push(compiled);
+      appliedMechanics.push({
+        id: mechanic.id,
+        name: mechanic.name,
+        lifecycle: mechanic.lifecycle,
+      });
+    } catch (error) {
+      logger?.warn?.('[sandbox] failed to compile mechanic', mechanic?.id ?? '<unknown>', error);
+    }
+  }
+
+  return {
+    compiledMechanics,
+    appliedMechanics,
+  };
+}
+
+function activateMechanicsBranch(compiledMechanics, mechanicRuntime) {
+  let activatedMechanics = 0;
+  for (const compiled of compiledMechanics) {
+    mechanicRuntime.registerMechanic(compiled);
+    activatedMechanics += 1;
+  }
+  return { activatedMechanics };
+}
+
+export async function runAgenticApplyWorkflow({
+  artifact,
+  envelope,
+  templateVersion,
+  primitiveRegistry,
+  mechanicRuntime,
+  sandboxStateStore,
+  generateAssets,
+  resetToBaseline,
+  logger = console,
+}) {
+  if (!artifact?.sandboxPatch) {
+    return {
+      assets: [],
+      activatedMechanics: 0,
+      appliedMechanics: [],
+    };
+  }
+
+  if (artifact.sandboxPatch.resetToBaselineFirst) {
+    await resetToBaseline('artifact-apply');
+  }
+
+  const patchCollections = normalizePatchCollections(artifact);
+  const patchPromise = Promise.resolve().then(() =>
+    compileMechanicsBranch(patchCollections.mechanics, primitiveRegistry, logger)
+  );
+  const assetsPromise = Promise.resolve()
+    .then(() => generateAssets({ envelope, artifact }))
+    .catch((error) => {
+      logger?.warn?.('[sandbox] asset generation failed', error);
+      return {
+        jobs: [],
+        assets: [],
+      };
+    });
+  const activationPromise = Promise.all([patchPromise, assetsPromise]).then(([patchResult]) =>
+    activateMechanicsBranch(patchResult.compiledMechanics, mechanicRuntime)
+  );
+
+  const [patchResult, assetsResult, activationResult] = await Promise.all([
+    patchPromise,
+    assetsPromise,
+    activationPromise,
+  ]);
+
+  const prior = await sandboxStateStore.load();
+  await sandboxStateStore.save({
+    ...prior,
+    templateVersion: templateVersion ?? prior.templateVersion,
+    mechanics: patchResult.appliedMechanics,
+    units: patchCollections.units,
+    actions: patchCollections.actions,
+    ui: patchCollections.ui,
+    assets: toArray(assetsResult.assets),
+  });
+
+  return {
+    assets: toArray(assetsResult.assets),
+    activatedMechanics: activationResult.activatedMechanics,
+    appliedMechanics: patchResult.appliedMechanics,
+  };
+}
