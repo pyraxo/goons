@@ -178,4 +178,22 @@ export const BUILTIN_PRIMITIVE_CATALOG = [
       },
     ],
   },
+  {
+    id: 'actions.cast_spell',
+    version: 1,
+    description: 'Casts an existing baseline spell by name using engine spell logic.',
+    allowedEvents: ['onTick', 'onEnemySpawn', 'onEnemyDeath', 'onKillCombo', 'onWaveStart'],
+    args: {
+      spellName: stringArg({ minLength: 1 }),
+    },
+    requiredArgs: ['spellName'],
+    emitCommands: ({ args }) => [
+      {
+        type: 'actions.castSpell',
+        payload: {
+          spellName: args.spellName,
+        },
+      },
+    ],
+  },
 ];

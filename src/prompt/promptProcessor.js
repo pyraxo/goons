@@ -89,6 +89,11 @@ function summarizeArtifacts(artifact, applyRuntime = null) {
   return lines.slice(0, MAX_ARTIFACT_LINES);
 }
 
+function requestedMechanicCount(artifact) {
+  const mechanics = artifact?.sandboxPatch?.mechanics;
+  return Array.isArray(mechanics) ? mechanics.length : 0;
+}
+
 export class PromptProcessor {
   constructor(deps, callbacks = {}, options = {}) {
     this.queue = [];
@@ -202,6 +207,14 @@ export class PromptProcessor {
               templateVersion: result.applyDetails?.templateVersion ?? null,
               artifact,
             })) ?? null;
+
+          const requestedCount = requestedMechanicCount(artifact);
+          const activatedCount = Number(applyRuntime?.activatedMechanics ?? 0);
+          if (requestedCount > 0 && (!Number.isFinite(activatedCount) || activatedCount < 1)) {
+            throw new Error(
+              `No mechanics activated (${requestedCount} requested, ${Number.isFinite(activatedCount) ? activatedCount : 0} activated)`
+            );
+          }
         } catch (error) {
           const applyError = error instanceof Error ? error.message : 'unknown sandbox apply error';
           this.deps.refundReservedGold(reservationId);

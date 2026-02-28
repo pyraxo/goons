@@ -11,6 +11,7 @@ import {
 import { parseArtifactOutputText } from './src/prompt/artifactContract.js';
 import { parseEstimateOutputText } from './src/prompt/estimateContract.js';
 import { handleSpellGenerate } from './server/spell-api.js';
+import { createServerGameSession } from './server/game-session.js';
 
 const RESPONSES_API_URL = 'https://api.openai.com/v1/responses';
 const FAST_ESTIMATOR_MODEL = 'gpt-5.3-codex';
@@ -379,6 +380,117 @@ export default defineConfig(({ mode }) => {
       {
         name: 'openai-api-key-endpoints',
         configureServer(server) {
+          const gameSession = createServerGameSession();
+          server.httpServer?.once('close', () => {
+            gameSession.stop();
+          });
+
+          server.middlewares.use('/api/game/state', async (req, res) => {
+            if (req.method !== 'GET') {
+              res.statusCode = 405;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Method not allowed' }));
+              return;
+            }
+
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ state: gameSession.snapshot() }));
+          });
+
+          server.middlewares.use('/api/game/input', async (req, res) => {
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Method not allowed' }));
+              return;
+            }
+
+            try {
+              const body = await readJsonBody(req);
+              gameSession.setInput(body?.input ?? {});
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ ok: true }));
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'unknown error';
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: message }));
+            }
+          });
+
+          server.middlewares.use('/api/game/cast', async (req, res) => {
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Method not allowed' }));
+              return;
+            }
+
+            try {
+              const body = await readJsonBody(req);
+              const result = await gameSession.castPrompt(body?.prompt ?? '');
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ result }));
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'unknown error';
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: message }));
+            }
+          });
+
+          server.middlewares.use('/api/game/reset', async (req, res) => {
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Method not allowed' }));
+              return;
+            }
+
+            try {
+              const body = await readJsonBody(req);
+              const reason = typeof body?.reason === 'string' ? body.reason : 'manual';
+              gameSession.reset(reason);
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ ok: true, state: gameSession.snapshot() }));
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'unknown error';
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: message }));
+            }
+          });
+
+          server.middlewares.use('/api/game/apply-artifact', async (req, res) => {
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Method not allowed' }));
+              return;
+            }
+
+            try {
+              const body = await readJsonBody(req);
+              const result = await gameSession.applyArtifact({
+                envelope: body?.envelope ?? {},
+                templateVersion: body?.templateVersion ?? PROMPT_TEMPLATE_VERSION,
+                artifact: body?.artifact ?? null,
+              });
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ result }));
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'unknown error';
+              res.statusCode = 400;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: message }));
+            }
+          });
+
           server.middlewares.use('/api/prompt/estimate', async (req, res) => {
             if (req.method !== 'POST') {
               res.statusCode = 405;

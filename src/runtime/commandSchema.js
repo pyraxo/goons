@@ -1,4 +1,5 @@
 const ALLOWED_COMMAND_TYPES = new Set([
+  'actions.castSpell',
   'combat.applyDot',
   'combat.chainSpread',
   'combat.dealDamage',
@@ -28,6 +29,13 @@ function validatePayload(type, payload) {
   if (type === 'economy.addGold') {
     if (!validatePositiveNumber(payload.amount)) {
       return { ok: false, error: 'economy.addGold.amount must be a positive number' };
+    }
+    return { ok: true };
+  }
+
+  if (type === 'actions.castSpell') {
+    if (!validateString(payload.spellName)) {
+      return { ok: false, error: 'actions.castSpell.spellName must be a non-empty string' };
     }
     return { ok: true };
   }

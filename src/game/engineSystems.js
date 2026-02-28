@@ -680,33 +680,47 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     return null;
   }
 
-  function castFromPrompt(rawPrompt) {
-    if (game.globalCooldown > 0) {
-      onToast('Global cooldown active');
-      return false;
-    }
-
-    const spellName = parseSpell(rawPrompt);
-    if (!spellName) {
-      onToast(`No spell match for "${rawPrompt}"`);
-      return false;
-    }
-
-    if (!game.unlocks.includes(spellName)) {
-      onToast(`Spell not unlocked: ${spellName}`);
-      return false;
-    }
+  function castSpellByName(spellName, options = {}) {
+    const {
+      enforceCosts = true,
+      allowLocked = false,
+      showToast = true,
+    } = options;
 
     const spell = spells[spellName];
-    const spellCd = spellCooldowns.get(spellName) || 0;
-
-    if (spellCd > 0) {
-      onToast(`${spellName} cooldown ${spellCd.toFixed(1)}s`);
+    if (!spell) {
+      if (showToast) {
+        onToast(`No spell match for "${spellName}"`);
+      }
       return false;
     }
 
-    if (game.mana < spell.cost) {
-      onToast('Not enough mana');
+    if (!allowLocked && !game.unlocks.includes(spellName)) {
+      if (showToast) {
+        onToast(`Spell not unlocked: ${spellName}`);
+      }
+      return false;
+    }
+
+    if (enforceCosts && game.globalCooldown > 0) {
+      if (showToast) {
+        onToast('Global cooldown active');
+      }
+      return false;
+    }
+
+    const spellCd = spellCooldowns.get(spellName) || 0;
+    if (enforceCosts && spellCd > 0) {
+      if (showToast) {
+        onToast(`${spellName} cooldown ${spellCd.toFixed(1)}s`);
+      }
+      return false;
+    }
+
+    if (enforceCosts && game.mana < spell.cost) {
+      if (showToast) {
+        onToast('Not enough mana');
+      }
       return false;
     }
 
@@ -715,12 +729,30 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       return false;
     }
 
-    game.mana -= spell.cost;
-    spellCooldowns.set(spellName, spell.cooldown);
-    game.globalCooldown = 0.2;
-    onToast(`Cast ${spellName}: ${spell.description}`);
+    if (enforceCosts) {
+      game.mana -= spell.cost;
+      spellCooldowns.set(spellName, spell.cooldown);
+      game.globalCooldown = 0.2;
+    }
+    if (showToast) {
+      onToast(`Cast ${spellName}: ${spell.description}`);
+    }
     onHudChanged?.();
     return true;
+  }
+
+  function castFromPrompt(rawPrompt) {
+    const spellName = parseSpell(rawPrompt);
+    if (!spellName) {
+      onToast(`No spell match for "${rawPrompt}"`);
+      return false;
+    }
+
+    return castSpellByName(spellName, {
+      enforceCosts: true,
+      allowLocked: false,
+      showToast: true,
+    });
   }
 
   function buildSpellGenerationContext(prompt) {
@@ -1201,6 +1233,19 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
         game.gold += amount;
         onHudChanged?.();
       }
+      return;
+    }
+
+    if (command.type === 'actions.castSpell') {
+      const spellName = String(command.payload?.spellName ?? '').trim().toLowerCase();
+      if (!spellName) {
+        return;
+      }
+      castSpellByName(spellName, {
+        enforceCosts: false,
+        allowLocked: true,
+        showToast: false,
+      });
       return;
     }
 

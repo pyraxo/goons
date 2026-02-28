@@ -25,20 +25,24 @@ function resolvePath(path, context) {
   return current;
 }
 
-function resolveDynamicArgs(value, context) {
+function resolveDynamicArgs(value, context, unresolvedRefs) {
   if (Array.isArray(value)) {
-    return value.map((item) => resolveDynamicArgs(item, context));
+    return value.map((item) => resolveDynamicArgs(item, context, unresolvedRefs));
   }
 
   if (isDynamicRef(value)) {
     const resolved = resolvePath(value.slice(1), context);
-    return resolved === undefined ? value : resolved;
+    if (resolved === undefined) {
+      unresolvedRefs.push(value);
+      return value;
+    }
+    return resolved;
   }
 
   if (value && typeof value === 'object') {
     const resolved = {};
     for (const [key, item] of Object.entries(value)) {
-      resolved[key] = resolveDynamicArgs(item, context);
+      resolved[key] = resolveDynamicArgs(item, context, unresolvedRefs);
     }
     return resolved;
   }
@@ -221,7 +225,13 @@ export class PrimitiveRegistry {
       throw new Error(`Unknown primitive "${invocation.primitiveId}"`);
     }
 
-    const resolvedArgs = resolveDynamicArgs(invocation.args ?? {}, context);
+    const unresolvedRefs = [];
+    const resolvedArgs = resolveDynamicArgs(invocation.args ?? {}, context, unresolvedRefs);
+    if (unresolvedRefs.length > 0) {
+      throw new Error(
+        `Primitive "${primitive.id}" args could not be resolved: unresolved refs ${unresolvedRefs.join(', ')}`
+      );
+    }
     const resolvedValidation = this.validateInvocation(
       {
         primitiveId: invocation.primitiveId,

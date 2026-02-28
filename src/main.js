@@ -1,28 +1,34 @@
 import * as THREE from 'three';
-import { loadEnemyModels } from './enemy-models.js';
+import { disposeEnemyVisual, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
 import { estimatePrompt } from './prompt/costEstimator.js';
 import { MODEL_PRESET_MAP, PromptProcessor, REASONING_EFFORT_PRESET_MAP } from './prompt/promptProcessor.js';
 import { PROMPT_TEMPLATE_VERSION } from './prompt/templateDrafts.js';
-import { createGoldReservationStore } from './game/economy.js';
-import { createEngineSystems } from './game/engineSystems.js';
-import { BASE_Z, createInitialGameState } from './game/config.js';
-import { buildMap, createCommander, laneX } from './game/world.js';
-import { runAgenticApplyWorkflow } from './runtime/agenticApplyWorkflow.js';
-import { generateGlbAssetsForArtifact } from './runtime/assets/glbAssetAgent.js';
-import { MechanicRuntime } from './runtime/mechanicRuntime.js';
-import { InMemorySandboxStateStore } from './runtime/persistence/sandboxStateStore.js';
-import { createDefaultPrimitiveRegistry } from './runtime/primitives/primitiveRegistry.js';
+import { BASE_Z } from './game/config.js';
+import { buildMap, createCommander } from './game/world.js';
 
-const GAME = createInitialGameState();
 const PROMPT_EXECUTION_PRESET = 'fast';
+const STATE_POLL_INTERVAL_MS = 50;
+const INPUT_PUSH_INTERVAL_MS = 35;
+
+const GAME = {
+  baseHp: 260,
+  maxMana: 120,
+  mana: 120,
+  score: 0,
+  wave: 1,
+  gold: 0,
+  unlocks: ['fireball', 'wall'],
+  gameOver: false,
+};
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
 const BASELINE_HISTORY_TEXT =
   `No applied prompts yet.\n` +
   `Sandbox baseline: no generated ui/mechanics/units/actions.\n` +
   `Template: ${PROMPT_TEMPLATE_VERSION}`;
-
-const mechanicRuntime = new MechanicRuntime();
-const primitiveRegistry = createDefaultPrimitiveRegistry();
-const sandboxStateStore = new InMemorySandboxStateStore();
 
 const dom = {
   baseHp: document.getElementById('baseHp'),
@@ -91,80 +97,53 @@ const input = {
   commandOpen: false,
 };
 
-const rng = {
-  next(min, max) {
-    return min + Math.random() * (max - min);
+const promptReservations = new Map();
+
+const promptReservationStore = {
+  canSpendGold(amount) {
+    const numeric = Number(amount);
+    return Number.isFinite(numeric) && numeric > 0 && GAME.gold >= numeric;
   },
-  int(min, max) {
-    return Math.floor(this.next(min, max + 1));
+  reserveGold(amount) {
+    const numeric = Number(amount);
+    if (!this.canSpendGold(numeric)) {
+      return null;
+    }
+    const id = `res_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    promptReservations.set(id, numeric);
+    return id;
+  },
+  commitReservedGold(reservationId) {
+    if (!promptReservations.has(reservationId)) {
+      return false;
+    }
+    promptReservations.delete(reservationId);
+    return true;
+  },
+  refundReservedGold(reservationId) {
+    if (!promptReservations.has(reservationId)) {
+      return false;
+    }
+    promptReservations.delete(reservationId);
+    return true;
+  },
+  getReservedGold() {
+    let total = 0;
+    for (const amount of promptReservations.values()) {
+      total += amount;
+    }
+    return total;
+  },
+  clearReservations() {
+    promptReservations.clear();
   },
 };
 
-const goldStore = createGoldReservationStore({
-  game: GAME,
-  onChanged: refreshHud,
-});
-
-const engineSystems = createEngineSystems({
-  scene,
-  game: GAME,
-  commander,
-  laneX,
-  rng,
-  onToast: setToast,
-  onHudChanged: refreshHud,
-});
-
-engineSystems.setRuntimeHooks({
-  onEnemySpawn: ({ enemy }) => {
-    mechanicRuntime.dispatchEvent(
-      'onEnemySpawn',
-      {
-        enemy,
-        game: runtimeGameContext(),
-      },
-      engineSystems.applyRuntimeCommand
-    );
-  },
-  onEnemyDeath: ({ enemy, rewardGold }) => {
-    mechanicRuntime.dispatchEvent(
-      'onEnemyDeath',
-      {
-        enemy,
-        rewardGold,
-        game: runtimeGameContext(),
-      },
-      engineSystems.applyRuntimeCommand
-    );
-  },
-  onKillCombo: ({ comboCount, enemy }) => {
-    mechanicRuntime.dispatchEvent(
-      'onKillCombo',
-      {
-        comboCount,
-        enemy,
-        game: runtimeGameContext(),
-      },
-      engineSystems.applyRuntimeCommand
-    );
-  },
-  onWaveStart: ({ wave }) => {
-    mechanicRuntime.dispatchEvent(
-      'onWaveStart',
-      {
-        wave,
-        game: runtimeGameContext(),
-      },
-      engineSystems.applyRuntimeCommand
-    );
-  },
-});
-
 const promptProcessor = new PromptProcessor(
   {
-    reserveGold: goldStore.reserveGold,
-    commitReservedGold: goldStore.commitReservedGold,
-    refundReservedGold: goldStore.refundReservedGold,
+    reserveGold: (amount) => promptReservationStore.reserveGold(amount),
+    commitReservedGold: (id) => promptReservationStore.commitReservedGold(id),
+    refundReservedGold: (id) => promptReservationStore.refundReservedGold(id),
   },
   {
     onQueueUpdated: (queueSize) => {
@@ -174,8 +153,27 @@ const promptProcessor = new PromptProcessor(
     onStatus: (message) => {
       dom.applyStatus.textContent = message;
     },
-    onArtifactApplied: ({ envelope, templateVersion, artifact }) => {
-      return applyArtifactToSandbox({ envelope, templateVersion, artifact });
+    onArtifactApplied: async ({ envelope, templateVersion, artifact }) => {
+      const response = await fetch('/api/game/apply-artifact', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          envelope,
+          templateVersion,
+          artifact,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(String(payload?.error || `HTTP ${response.status}`));
+      }
+
+      await pollGameState(true);
+      return payload?.result ?? { generatedAssets: 0, activatedMechanics: 0 };
     },
     onHistoryUpdated: () => {
       const script = promptProcessor.getReplayScript();
@@ -187,19 +185,29 @@ const promptProcessor = new PromptProcessor(
   }
 );
 
+const enemyVisuals = new Map();
+const wallVisuals = new Map();
+const projectileVisuals = new Map();
+const zoneVisuals = new Map();
+
+let latestSnapshot = null;
 let lastEstimate = null;
 let estimateInFlight = false;
-let lastTime = performance.now();
-let toastTimer = 0;
 let resetInFlight = false;
-let spellRequestInFlight = false;
+let stateRequestInFlight = false;
+let lastStatePollAt = 0;
+let lastInputPushAt = 0;
+let toastTimer = 0;
+let lastTime = performance.now();
 
 window.addEventListener('resize', onResize);
 window.addEventListener('keydown', onKeyDown);
 window.addEventListener('keyup', onKeyUp);
+
 dom.resetSandboxBtn.addEventListener('click', () => {
   void resetSandboxToTemplate('manual');
 });
+
 window.resetSandboxToTemplate = () => resetSandboxToTemplate('manual');
 
 dom.commandInput.addEventListener('keydown', (event) => {
@@ -221,17 +229,21 @@ setupPromptUi();
 bootstrap();
 
 async function bootstrap() {
-  await resetSandboxToTemplate('bootstrap');
-  refreshHud();
-  dom.loopStatus.textContent = 'Loop: Running';
+  dom.loopStatus.textContent = 'Loop: Syncing';
   dom.loopStatus.classList.remove('status-danger');
-  dom.loopStatus.classList.add('status-ok');
+  dom.loopStatus.classList.remove('status-ok');
 
   try {
     await loadEnemyModels(scene);
   } catch (error) {
     console.warn('[main] Enemy model preload failed. Fallback meshes will be used.', error);
   }
+
+  await resetSandboxToTemplate('bootstrap');
+
+  dom.loopStatus.textContent = 'Loop: Running';
+  dom.loopStatus.classList.remove('status-danger');
+  dom.loopStatus.classList.add('status-ok');
 
   animate();
 }
@@ -244,9 +256,6 @@ function onResize() {
 
 function onKeyDown(event) {
   if (GAME.gameOver) {
-    if (event.key === 'r' || event.key === 'R') {
-      window.location.reload();
-    }
     return;
   }
 
@@ -266,17 +275,51 @@ function onKeyDown(event) {
     return;
   }
 
-  if (event.key === 'w' || event.key === 'W') input.w = true;
-  if (event.key === 'a' || event.key === 'A') input.a = true;
-  if (event.key === 's' || event.key === 'S') input.s = true;
-  if (event.key === 'd' || event.key === 'D') input.d = true;
+  let changed = false;
+  if (event.key === 'w' || event.key === 'W') {
+    changed = !input.w;
+    input.w = true;
+  }
+  if (event.key === 'a' || event.key === 'A') {
+    changed = changed || !input.a;
+    input.a = true;
+  }
+  if (event.key === 's' || event.key === 'S') {
+    changed = changed || !input.s;
+    input.s = true;
+  }
+  if (event.key === 'd' || event.key === 'D') {
+    changed = changed || !input.d;
+    input.d = true;
+  }
+
+  if (changed) {
+    void pushInputState(true);
+  }
 }
 
 function onKeyUp(event) {
-  if (event.key === 'w' || event.key === 'W') input.w = false;
-  if (event.key === 'a' || event.key === 'A') input.a = false;
-  if (event.key === 's' || event.key === 'S') input.s = false;
-  if (event.key === 'd' || event.key === 'D') input.d = false;
+  let changed = false;
+  if (event.key === 'w' || event.key === 'W') {
+    changed = changed || input.w;
+    input.w = false;
+  }
+  if (event.key === 'a' || event.key === 'A') {
+    changed = changed || input.a;
+    input.a = false;
+  }
+  if (event.key === 's' || event.key === 'S') {
+    changed = changed || input.s;
+    input.s = false;
+  }
+  if (event.key === 'd' || event.key === 'D') {
+    changed = changed || input.d;
+    input.d = false;
+  }
+
+  if (changed) {
+    void pushInputState(true);
+  }
 }
 
 function openCommand() {
@@ -327,7 +370,7 @@ function setupPromptUi() {
       return;
     }
 
-    if (!goldStore.canSpendGold(lastEstimate.estimatedGoldCost)) {
+    if (!promptReservationStore.canSpendGold(lastEstimate.estimatedGoldCost)) {
       dom.applyStatus.textContent = 'Apply blocked: not enough Gold at queue time';
       syncApplyButtonState();
       return;
@@ -354,7 +397,7 @@ function setupPromptUi() {
 }
 
 function renderEstimate(estimate) {
-  const canAfford = goldStore.canSpendGold(estimate.estimatedGoldCost);
+  const canAfford = promptReservationStore.canSpendGold(estimate.estimatedGoldCost);
   const selectedPreset = PROMPT_EXECUTION_PRESET;
 
   dom.previewBody.innerHTML = `
@@ -374,7 +417,7 @@ function syncApplyButtonState() {
   const canApply =
     Boolean(lastEstimate) &&
     !estimateInFlight &&
-    goldStore.canSpendGold(lastEstimate.estimatedGoldCost) &&
+    promptReservationStore.canSpendGold(lastEstimate.estimatedGoldCost) &&
     !GAME.gameOver;
   dom.applyBtn.disabled = !canApply;
 }
@@ -385,16 +428,17 @@ function updateHud() {
   dom.wave.textContent = String(GAME.wave);
   dom.score.textContent = String(GAME.score);
   dom.gold.textContent = Math.floor(GAME.gold).toLocaleString();
-  dom.reservedGold.textContent = Math.floor(goldStore.getReservedGold()).toLocaleString();
+
+  const reservedFromState = Number(latestSnapshot?.reservedGold);
+  const fallbackReserved = promptReservationStore.getReservedGold();
+  dom.reservedGold.textContent = Math.floor(Number.isFinite(reservedFromState) ? reservedFromState : fallbackReserved).toLocaleString();
+
   dom.unlocks.textContent = GAME.unlocks.join(', ');
   syncApplyButtonState();
 }
 
-function refreshHud() {
-  updateHud();
-}
-
 function setToast(text) {
+  if (!text) return;
   dom.toast.textContent = text;
   dom.toast.classList.add('show');
   toastTimer = 1.8;
@@ -408,13 +452,267 @@ function updateToast(dt) {
   }
 }
 
-function gameOver() {
-  GAME.gameOver = true;
-  dom.loopStatus.textContent = 'Loop: Halted';
-  dom.loopStatus.classList.remove('status-ok');
-  dom.loopStatus.classList.add('status-danger');
-  dom.applyStatus.textContent = 'Prompt apply disabled (game over)';
-  setToast(`Base destroyed. Final score ${GAME.score}. Press R to restart.`);
+async function pushInputState(force = false) {
+  const now = Date.now();
+  if (!force && now - lastInputPushAt < INPUT_PUSH_INTERVAL_MS) {
+    return;
+  }
+  lastInputPushAt = now;
+
+  try {
+    await fetch('/api/game/input', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        input: {
+          w: input.w,
+          a: input.a,
+          s: input.s,
+          d: input.d,
+        },
+      }),
+    });
+  } catch (error) {
+    console.warn('[main] failed to push input state', error);
+  }
+}
+
+async function pollGameState(force = false) {
+  const now = Date.now();
+  if (!force && now - lastStatePollAt < STATE_POLL_INTERVAL_MS) {
+    return;
+  }
+  if (stateRequestInFlight) {
+    return;
+  }
+
+  stateRequestInFlight = true;
+  lastStatePollAt = now;
+
+  try {
+    const response = await fetch('/api/game/state', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const state = payload?.state;
+    if (!state || typeof state !== 'object') {
+      return;
+    }
+
+    latestSnapshot = state;
+    applySnapshot(state);
+  } catch (error) {
+    console.warn('[main] game state poll failed', error);
+  } finally {
+    stateRequestInFlight = false;
+  }
+}
+
+function applySnapshot(state) {
+  const game = state?.game ?? {};
+  GAME.baseHp = Number(game.baseHp ?? GAME.baseHp);
+  GAME.maxMana = Number(game.maxMana ?? GAME.maxMana);
+  GAME.mana = Number(game.mana ?? GAME.mana);
+  GAME.score = Number(game.score ?? GAME.score);
+  GAME.wave = Number(game.wave ?? GAME.wave);
+  GAME.gold = Number(game.gold ?? GAME.gold);
+  GAME.unlocks = Array.isArray(game.unlocks) ? game.unlocks : GAME.unlocks;
+  GAME.gameOver = Boolean(game.gameOver);
+
+  if (GAME.gameOver) {
+    dom.loopStatus.textContent = 'Loop: Halted';
+    dom.loopStatus.classList.remove('status-ok');
+    dom.loopStatus.classList.add('status-danger');
+  } else {
+    dom.loopStatus.textContent = 'Loop: Running';
+    dom.loopStatus.classList.remove('status-danger');
+    dom.loopStatus.classList.add('status-ok');
+  }
+
+  commander.mesh.position.x = Number(state?.commander?.x ?? commander.mesh.position.x);
+  commander.mesh.position.z = Number(state?.commander?.z ?? commander.mesh.position.z);
+
+  syncEnemyVisuals(state?.enemies ?? []);
+  syncWallVisuals(state?.walls ?? []);
+  syncProjectileVisuals(state?.projectiles ?? []);
+  syncZoneVisuals(state?.zones ?? []);
+
+  const toastMessage = String(state?.latestToast?.message ?? '').trim();
+  if (toastMessage) {
+    const toastAt = Number(state?.latestToast?.at ?? 0);
+    const knownAt = Number(dom.toast.dataset.at || 0);
+    if (!knownAt || (Number.isFinite(toastAt) && toastAt > knownAt)) {
+      dom.toast.dataset.at = String(toastAt || Date.now());
+      setToast(toastMessage);
+    }
+  }
+
+  updateHud();
+}
+
+function syncEnemyVisuals(enemies) {
+  const nextIds = new Set();
+
+  for (const enemy of enemies) {
+    if (!enemy || enemy.dead) continue;
+    const id = String(enemy.id);
+    nextIds.add(id);
+
+    let entry = enemyVisuals.get(id);
+    if (!entry) {
+      const visual = spawnEnemyVisual(
+        String(enemy.kind || 'melee'),
+        Number(enemy.lane || 0),
+        new THREE.Vector3(Number(enemy.x || 0), 0, Number(enemy.z || 0))
+      );
+      scene.add(visual.group);
+      entry = {
+        visual,
+        state: null,
+      };
+      enemyVisuals.set(id, entry);
+    }
+
+    entry.visual.group.position.x = Number(enemy.x || 0);
+    entry.visual.group.position.z = Number(enemy.z || 0);
+    entry.visual.playbackScale = Number(enemy.frozenFor || 0) > 0 ? 0.15 : 1;
+
+    const anim = String(enemy.anim || 'run');
+    if (entry.state !== anim) {
+      setEnemyAnim(entry.visual, anim);
+      entry.state = anim;
+    }
+  }
+
+  for (const [id, entry] of enemyVisuals.entries()) {
+    if (nextIds.has(id)) continue;
+    disposeEnemyVisual(entry.visual);
+    enemyVisuals.delete(id);
+  }
+}
+
+function wallMaterial() {
+  return new THREE.MeshStandardMaterial({ color: 0x6f7f95, roughness: 0.92 });
+}
+
+function syncWallVisuals(walls) {
+  const nextIds = new Set();
+
+  for (const wall of walls) {
+    const id = String(wall.id);
+    nextIds.add(id);
+
+    let mesh = wallVisuals.get(id);
+    if (!mesh) {
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(5.6, 3.6, 1.2), wallMaterial());
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      wallVisuals.set(id, mesh);
+    }
+
+    mesh.position.set(Number(wall.x || 0), 1.8, Number(wall.z || 0));
+    const hp = Number(wall.hp || 0);
+    const maxHp = Math.max(1, Number(wall.maxHp || 140));
+    mesh.scale.y = 0.72 + clamp(hp / maxHp, 0, 1) * 0.28;
+  }
+
+  for (const [id, mesh] of wallVisuals.entries()) {
+    if (nextIds.has(id)) continue;
+    scene.remove(mesh);
+    wallVisuals.delete(id);
+  }
+}
+
+function projectileMesh(kind) {
+  if (kind === 'zap') {
+    return new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15, 0.15, 5, 6),
+      new THREE.MeshStandardMaterial({ color: 0xa8eeff, emissive: 0x53b7ff, emissiveIntensity: 1.0 })
+    );
+  }
+
+  return new THREE.Mesh(
+    new THREE.SphereGeometry(0.56, 10, 10),
+    new THREE.MeshStandardMaterial({ color: 0xff8840, emissive: 0x8c2b00, emissiveIntensity: 0.9 })
+  );
+}
+
+function syncProjectileVisuals(projectiles) {
+  const nextIds = new Set();
+
+  for (const projectile of projectiles) {
+    const id = String(projectile.id);
+    nextIds.add(id);
+
+    let mesh = projectileVisuals.get(id);
+    if (!mesh) {
+      mesh = projectileMesh(String(projectile.kind || 'fireball'));
+      mesh.castShadow = true;
+      scene.add(mesh);
+      projectileVisuals.set(id, mesh);
+    }
+
+    mesh.position.set(Number(projectile.x || 0), Number(projectile.y || 1.5), Number(projectile.z || 0));
+  }
+
+  for (const [id, mesh] of projectileVisuals.entries()) {
+    if (nextIds.has(id)) continue;
+    scene.remove(mesh);
+    projectileVisuals.delete(id);
+  }
+}
+
+function zoneMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: 0xffa347,
+    emissive: 0xff5e00,
+    emissiveIntensity: 0.25,
+    transparent: true,
+    opacity: 0.45,
+  });
+}
+
+function syncZoneVisuals(zones) {
+  const nextIds = new Set();
+
+  for (const zone of zones) {
+    const id = String(zone.id);
+    nextIds.add(id);
+
+    let mesh = zoneVisuals.get(id);
+    if (!mesh) {
+      mesh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.22, 24), zoneMaterial());
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      zoneVisuals.set(id, mesh);
+    }
+
+    const laneMin = Number(zone.laneMin ?? 0);
+    const laneMax = Number(zone.laneMax ?? laneMin);
+    const centerLane = (laneMin + laneMax) * 0.5;
+    const x = (centerLane - 2) * 8;
+    const radius = Math.max(0.8, Number(zone.radius || 2));
+    const laneWidth = Math.max(1, laneMax - laneMin + 1);
+    mesh.position.set(x, 0.12, Number(zone.z || 0));
+    mesh.scale.set(radius * laneWidth, 1, radius * 1.2);
+  }
+
+  for (const [id, mesh] of zoneVisuals.entries()) {
+    if (nextIds.has(id)) continue;
+    scene.remove(mesh);
+    zoneVisuals.delete(id);
+  }
 }
 
 async function resetSandboxToTemplate(reason) {
@@ -431,34 +729,44 @@ async function resetSandboxToTemplate(reason) {
   try {
     promptProcessor.clearQueuedJobs();
     await promptProcessor.waitForIdle(15_000);
-    await resetSandboxToBaseline(reason);
-
-    Object.assign(GAME, createInitialGameState());
-    engineSystems.resetDynamicState();
-    goldStore.clearReservations();
+    promptReservationStore.clearReservations();
     promptProcessor.clearHistory();
 
     input.w = false;
     input.a = false;
     input.s = false;
     input.d = false;
+
     lastEstimate = null;
     estimateInFlight = false;
-    spellRequestInFlight = false;
     dom.promptInput.value = '';
     dom.commandInput.value = '';
     dom.preview.hidden = true;
     closeCommand();
 
+    const response = await fetch('/api/game/reset', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ reason }),
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(String(body?.error || `HTTP ${response.status}`));
+    }
+
+    await pushInputState(true);
+    await pollGameState(true);
+
     commander.mesh.position.set(0, 0, BASE_Z - 5);
     toastTimer = 0;
     dom.toast.classList.remove('show');
-    lastTime = performance.now();
-
     dom.loopStatus.textContent = 'Loop: Running';
     dom.loopStatus.classList.remove('status-danger');
     dom.loopStatus.classList.add('status-ok');
-    refreshHud();
     dom.applyStatus.textContent = 'Sandbox reset to template baseline';
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
@@ -472,54 +780,30 @@ async function resetSandboxToTemplate(reason) {
 }
 
 async function handleSpellCommand(rawPrompt) {
-  if (spellRequestInFlight) {
-    setToast('Spellcrafting in progress');
-    return;
-  }
-
-  if (GAME.globalCooldown > 0) {
-    engineSystems.castFromPrompt(rawPrompt);
-    return;
-  }
-
-  spellRequestInFlight = true;
   try {
-    const response = await fetch('/api/spells/generate', {
+    const response = await fetch('/api/game/cast', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       credentials: 'same-origin',
-      body: JSON.stringify(engineSystems.buildSpellGenerationContext(rawPrompt)),
+      body: JSON.stringify({ prompt: rawPrompt }),
     });
 
+    const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      throw new Error(String(payload?.error || `HTTP ${response.status}`));
     }
 
-    const payload = await response.json();
-    const casted = engineSystems.castFromGeneratedSpell(payload?.spell);
-    if (!casted) {
-      engineSystems.castFromPrompt(rawPrompt);
-      return;
+    const message = String(payload?.result?.message ?? '').trim();
+    if (message) {
+      setToast(message);
     }
 
-    if (payload?.source === 'fallback') {
-      const reason = payload?.meta?.fallbackReason ? ` (${payload.meta.fallbackReason})` : '';
-      setToast(`Fallback cast${reason}`);
-      return;
-    }
-
-    const effectText =
-      Array.isArray(payload?.spell?.effects) && payload.spell.effects.length > 0
-        ? payload.spell.effects.join('+')
-        : 'none';
-    setToast(`LLM: ${payload?.spell?.archetype || 'spell'}/${effectText}`);
+    await pollGameState(true);
   } catch (error) {
-    console.warn('[main] spell generation failed, falling back to local parser', error);
-    engineSystems.castFromPrompt(rawPrompt);
-  } finally {
-    spellRequestInFlight = false;
+    console.warn('[main] spell command failed', error);
+    setToast('Spell command failed');
   }
 }
 
@@ -528,71 +812,16 @@ function animate() {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (!GAME.gameOver) {
-    GAME.elapsed += dt;
-    engineSystems.updateCommander(dt, input);
-    engineSystems.updateSpawning(dt);
-    engineSystems.updateResources(dt);
-    engineSystems.updateWalls(dt);
-    engineSystems.updateZones(dt);
-    engineSystems.updateEnemies(dt);
-    engineSystems.updateProjectiles(dt);
-    mechanicRuntime.tick(
-      dt,
-      {
-        game: runtimeGameContext(),
-      },
-      engineSystems.applyRuntimeCommand
-    );
-    updateHud();
+  void pollGameState(false);
+  void pushInputState(false);
 
-    if (GAME.baseHp <= 0) {
-      gameOver();
-    }
+  for (const entry of enemyVisuals.values()) {
+    entry.visual.update(dt);
   }
 
   updateToast(dt);
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
-}
-
-function runtimeGameContext() {
-  return {
-    wave: GAME.wave,
-    kills: GAME.kills,
-    gold: GAME.gold,
-    mana: GAME.mana,
-    baseHp: GAME.baseHp,
-  };
-}
-
-async function resetSandboxToBaseline(reason) {
-  mechanicRuntime.clear();
-  await sandboxStateStore.reset();
-  console.info(`[sandbox] baseline reset (${reason})`);
-}
-
-async function applyArtifactToSandbox({ envelope, templateVersion, artifact }) {
-  const result = await runAgenticApplyWorkflow({
-    artifact,
-    envelope,
-    templateVersion: templateVersion ?? PROMPT_TEMPLATE_VERSION,
-    primitiveRegistry,
-    mechanicRuntime,
-    sandboxStateStore,
-    generateAssets: ({ envelope: nextEnvelope, artifact: nextArtifact }) =>
-      generateGlbAssetsForArtifact({
-        envelope: nextEnvelope,
-        artifact: nextArtifact,
-      }),
-    resetToBaseline: resetSandboxToBaseline,
-    logger: console,
-  });
-
-  return {
-    generatedAssets: result.assets.length,
-    activatedMechanics: result.activatedMechanics,
-  };
 }
 
 function isTypingTarget(target) {
