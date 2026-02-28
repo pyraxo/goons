@@ -10,7 +10,7 @@ import {
 } from './combat/reaction-physics.js';
 import { disposeEnemyVisual, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
 import { estimatePrompt } from './prompt/costEstimator.js';
-import { MODEL_PRESET_MAP, PromptProcessor } from './prompt/promptProcessor.js';
+import { MODEL_PRESET_MAP, PromptProcessor, REASONING_EFFORT_PRESET_MAP } from './prompt/promptProcessor.js';
 import { PROMPT_TEMPLATE_VERSION } from './prompt/templateDrafts.js';
 
 const LANE_COUNT = 5;
@@ -116,6 +116,7 @@ const dom = {
   estimateBtn: document.getElementById('estimateBtn'),
   applyBtn: document.getElementById('applyBtn'),
   cancelSpellQueueBtn: document.getElementById('cancelSpellQueueBtn'),
+  resetSandboxBtn: document.getElementById('resetSandboxBtn'),
   toast: document.getElementById('toast'),
 };
 
@@ -202,6 +203,7 @@ let spawnTimer = 0;
 let waveTimer = 0;
 let lastTime = performance.now();
 let toastTimer = 0;
+let resetInFlight = false;
 const spellHistory = [];
 
 function sleep(ms) {
@@ -623,6 +625,10 @@ function setupPromptUi() {
     cancelQueuedSpells();
   });
 
+  dom.resetSandboxBtn?.addEventListener('click', () => {
+    void resetSandboxToTemplate('manual');
+  });
+
   function forceApplyFromPromptInput() {
     if (isSpellApiBackendSelected()) {
       submitPromptInputToSpellApi();
@@ -699,7 +705,7 @@ function renderEstimate(estimate) {
     <div><strong>Risk:</strong> ${estimate.riskLevel}</div>
     <div><strong>Cost:</strong> ${estimate.estimatedGoldCost} Gold</div>
     <div><strong>Estimator:</strong> gpt-5.3-codex (reasoning: low)</div>
-    <div><strong>Preset Model:</strong> ${MODEL_PRESET_MAP[selectedPreset]}</div>
+    <div><strong>Preset Model:</strong> ${MODEL_PRESET_MAP[selectedPreset]} (reasoning: ${REASONING_EFFORT_PRESET_MAP[selectedPreset]})</div>
     <div><strong>Review Required:</strong> ${estimate.requiresReview ? 'yes' : 'no'}</div>
     <div><strong>Can Afford:</strong> ${canAfford ? 'yes' : 'no'}</div>
   `;
@@ -711,6 +717,7 @@ function syncApplyButtonState() {
   const canApply =
     Boolean(lastEstimate) &&
     !estimateInFlight &&
+    !resetInFlight &&
     canSpendGold(lastEstimate.estimatedGoldCost) &&
     !GAME.gameOver;
   dom.applyBtn.disabled = !canApply;
@@ -886,6 +893,36 @@ function cancelQueuedSpells() {
   dom.applyStatus.textContent = `Cancelled ${pending.length} queued spell${pending.length === 1 ? '' : 's'}`;
   setToast('Queued spells cancelled');
   syncSpellQueueUi();
+}
+
+async function resetSandboxToTemplate(reason) {
+  if (resetInFlight) {
+    return;
+  }
+
+  resetInFlight = true;
+  if (dom.resetSandboxBtn) {
+    dom.resetSandboxBtn.disabled = true;
+  }
+  dom.applyStatus.textContent = 'Resetting sandbox to template baseline...';
+
+  try {
+    promptProcessor.clearQueuedJobs();
+    await promptProcessor.waitForIdle(15_000);
+    promptProcessor.clearHistory();
+    cancelQueuedSpells();
+    await sleep(120);
+    setToast(`Reset sandbox (${reason}), reloading baseline...`);
+    window.location.reload();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    dom.applyStatus.textContent = `Sandbox reset failed: ${message}`;
+    resetInFlight = false;
+    if (dom.resetSandboxBtn) {
+      dom.resetSandboxBtn.disabled = false;
+    }
+    syncApplyButtonState();
+  }
 }
 
 function syncSpellQueueUi() {

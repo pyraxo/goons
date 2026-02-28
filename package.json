@@ -14,7 +14,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "three": "^0.180.0"
+    "three": "^0.180.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "vite": "^7.1.7",

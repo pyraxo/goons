@@ -20,7 +20,7 @@ const EFFECT_WEIGHTS = {
 const TOOL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['name', 'description', 'archetype', 'element', 'targeting', 'numbers', 'effects', 'vfx', 'sfx'],
+  required: ['archetype', 'element', 'targeting', 'numbers', 'effects', 'vfx', 'sfx'],
   properties: {
     name: {
       type: 'string',
@@ -72,7 +72,7 @@ const TOOL_SCHEMA = {
     vfx: {
       type: 'object',
       additionalProperties: false,
-      required: ['palette', 'intensity', 'shape', 'primaryColor', 'secondaryColor', 'trailEffect', 'impactEffect'],
+      required: ['palette', 'intensity', 'shape'],
       properties: {
         palette: { type: 'string', minLength: 2, maxLength: 24 },
         intensity: { type: 'number', minimum: 0.2, maximum: 1.4 },

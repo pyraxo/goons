@@ -114,6 +114,22 @@ canvas {
   backdrop-filter: blur(5px);
 }
 
+#resetSandboxBtn {
+  border: 1px solid #355f8d;
+  border-radius: 8px;
+  background: rgba(8, 17, 30, 0.92);
+  color: #eaf4ff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+#resetSandboxBtn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .status-ok {
   color: var(--ok);
 }
@@ -237,16 +253,18 @@ canvas {
 
 #promptBar {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
   display: grid;
   grid-template-columns: 1fr 190px 170px auto auto auto;
   gap: 8px;
   align-items: center;
   z-index: 35;
   padding: 10px 12px;
-  border-top: 1px solid var(--panel-border);
+  width: min(760px, calc(100vw - 24px));
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
   background: color-mix(in srgb, #091322 82%, #000);
   backdrop-filter: blur(5px);
 }
@@ -341,6 +359,8 @@ canvas {
 
   #promptBar {
     grid-template-columns: 1fr;
+    width: calc(100vw - 20px);
+    bottom: 14px;
   }
 
   #estimateBtn,

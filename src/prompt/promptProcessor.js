@@ -1,7 +1,12 @@
 export const MODEL_PRESET_MAP = {
   fast: 'gpt-5.3-codex',
-  medium: 'gpt-5.3-codex-medium',
-  high: 'gpt-5.3-codex-high',
+  medium: 'gpt-5.3-codex',
+  high: 'gpt-5.3-codex',
+};
+export const REASONING_EFFORT_PRESET_MAP = {
+  fast: 'low',
+  medium: 'medium',
+  high: 'high',
 };
 
 const DEFAULT_MAX_RETRIES = 5;
@@ -31,18 +36,41 @@ function summarizeMechanics(artifact) {
   return mechanics.map((mechanic) => {
     const name = String(mechanic?.name ?? mechanic?.id ?? 'mechanic').trim() || 'mechanic';
     const description = String(mechanic?.description ?? '').trim();
+    const hooks = Array.isArray(mechanic?.hooks)
+      ? mechanic.hooks
+          .map((hook) => String(hook?.event ?? '').trim())
+          .filter(Boolean)
+          .slice(0, 3)
+      : [];
+    const primitives = Array.isArray(mechanic?.hooks)
+      ? mechanic.hooks
+          .flatMap((hook) =>
+            Array.isArray(hook?.invocations)
+              ? hook.invocations.map((invocation) => String(invocation?.primitiveId ?? '').trim())
+              : []
+          )
+          .filter(Boolean)
+          .slice(0, 4)
+      : [];
     const rules = Array.isArray(mechanic?.rules)
       ? mechanic.rules
           .map((rule) => String(rule ?? '').trim())
           .filter(Boolean)
           .slice(0, 2)
       : [];
-    const details = [description, ...rules].filter(Boolean).join(' | ');
+    const details = [
+      description,
+      hooks.length > 0 ? `hooks=${hooks.join(',')}` : '',
+      primitives.length > 0 ? `primitives=${primitives.join(',')}` : '',
+      ...rules,
+    ]
+      .filter(Boolean)
+      .join(' | ');
     return details ? `${name}: ${details}` : name;
   });
 }
 
-function summarizeArtifacts(artifact) {
+function summarizeArtifacts(artifact, applyRuntime = null) {
   if (!artifact?.sandboxPatch) {
     return [];
   }
@@ -54,7 +82,16 @@ function summarizeArtifacts(artifact) {
       lines.push(`${type}=${items.length}`);
     }
   }
+  const generatedAssets = Number(applyRuntime?.generatedAssets);
+  if (Number.isFinite(generatedAssets) && generatedAssets > 0) {
+    lines.push(`assets=${Math.floor(generatedAssets)}`);
+  }
   return lines.slice(0, MAX_ARTIFACT_LINES);
+}
+
+function requestedMechanicCount(artifact) {
+  const mechanics = artifact?.sandboxPatch?.mechanics;
+  return Array.isArray(mechanics) ? mechanics.length : 0;
 }
 
 export class PromptProcessor {
@@ -118,6 +155,18 @@ export class PromptProcessor {
     void this.processQueue();
   }
 
+  clearQueuedJobs() {
+    const dropped = this.queue.length;
+    this.queue = [];
+    this.callbacks.onQueueUpdated?.(this.getQueueSize());
+    return dropped;
+  }
+
+  clearHistory() {
+    this.history = [];
+    this.callbacks.onHistoryUpdated?.(this.getHistory());
+  }
+
   async processQueue() {
     if (this.processing) {
       return;
@@ -134,7 +183,8 @@ export class PromptProcessor {
 
       const { envelope, preset } = nextJob;
       const modelName = MODEL_PRESET_MAP[preset];
-      this.callbacks.onStatus?.(`Applying ${envelope.id} with ${modelName}...`);
+      const reasoningEffort = REASONING_EFFORT_PRESET_MAP[preset];
+      this.callbacks.onStatus?.(`Applying ${envelope.id} with ${modelName} (reasoning: ${reasoningEffort})...`);
 
       const reservationId = this.deps.reserveGold(envelope.estimatedGoldCost);
       if (!reservationId) {
@@ -147,8 +197,35 @@ export class PromptProcessor {
 
       const result = await this.runWithRetries(envelope, preset);
       if (result.success) {
-        this.deps.commitReservedGold(reservationId);
         const artifact = result.applyDetails?.artifact ?? null;
+        let applyRuntime = null;
+        try {
+          applyRuntime =
+            (await this.callbacks.onArtifactApplied?.({
+              envelope,
+              preset,
+              templateVersion: result.applyDetails?.templateVersion ?? null,
+              artifact,
+            })) ?? null;
+
+          const requestedCount = requestedMechanicCount(artifact);
+          const activatedCount = Number(applyRuntime?.activatedMechanics ?? 0);
+          if (requestedCount > 0 && (!Number.isFinite(activatedCount) || activatedCount < 1)) {
+            throw new Error(
+              `No mechanics activated (${requestedCount} requested, ${Number.isFinite(activatedCount) ? activatedCount : 0} activated)`
+            );
+          }
+        } catch (error) {
+          const applyError = error instanceof Error ? error.message : 'unknown sandbox apply error';
+          this.deps.refundReservedGold(reservationId);
+          this.callbacks.onStatus?.(
+            `Apply failed for ${envelope.id} during sandbox routes: ${applyError}. Gold refunded.`
+          );
+          this.callbacks.onQueueUpdated?.(this.getQueueSize());
+          continue;
+        }
+
+        this.deps.commitReservedGold(reservationId);
         this.history.push({
           id: envelope.id,
           prompt: envelope.rawPrompt,
@@ -158,7 +235,7 @@ export class PromptProcessor {
           appliedAt: new Date().toISOString(),
           templateVersion: result.applyDetails?.templateVersion ?? null,
           mechanics: summarizeMechanics(artifact),
-          artifactSummary: summarizeArtifacts(artifact),
+          artifactSummary: summarizeArtifacts(artifact, applyRuntime),
         });
         this.callbacks.onHistoryUpdated?.(this.getHistory());
         this.callbacks.onStatus?.(
@@ -249,6 +326,7 @@ export class PromptProcessor {
 
   async executeWithApiKeyProxy(envelope, preset) {
     const model = MODEL_PRESET_MAP[preset];
+    const reasoningEffort = REASONING_EFFORT_PRESET_MAP[preset];
 
     const response = await fetch(EXECUTE_ENDPOINT, {
       method: 'POST',
@@ -257,6 +335,7 @@ export class PromptProcessor {
       },
       body: JSON.stringify({
         model,
+        reasoningEffort,
         envelope: {
           promptId: envelope.id,
           prompt: envelope.rawPrompt,
