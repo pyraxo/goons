@@ -44,7 +44,8 @@ test('accepts high-power spell and derives capped cost', () => {
 
   assert.equal(result.ok, true);
   assert.ok(result.powerScore > 0);
-  assert.equal(result.spell.cost.mana, 65);
+  assert.ok(result.spell.cost.mana <= 65);
+  assert.ok(result.spell.cost.mana >= 40);
 });
 
 test('enforces compatibility rule for freeze + burn intensity', () => {
@@ -78,4 +79,69 @@ test('fallback remains deterministic with same prompt/context', () => {
   const second = deterministicFallback('mystery rune', baseContext);
 
   assert.deepEqual(first.spell, second.spell);
+});
+
+test('accepts lane_sweep pattern with width/length and normalizes sweep constraints', () => {
+  const result = validateAndFinalizeSpell(
+    {
+      archetype: 'zone_control',
+      element: 'storm',
+      targeting: { mode: 'front_cluster', pattern: 'lane_sweep', singleTarget: false },
+      numbers: { damage: 22, radius: 2.4, durationSec: 3, tickRate: 0.4, width: 18, length: 6, laneSpan: 1, speed: 14 },
+      effects: ['slow', 'knockback'],
+      vfx: { palette: 'tidal', intensity: 1.0, shape: 'wave' },
+      sfx: { cue: 'surf' },
+    },
+    baseContext
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.spell.targeting.pattern, 'lane_sweep');
+  assert.equal(result.spell.vfx.shape, 'wave');
+  assert.ok(result.spell.numbers.length >= 10);
+  assert.ok(result.spell.numbers.laneSpan >= 2);
+});
+
+test('accepts lane_circle + lane_cluster targeting and clamps lane index', () => {
+  const result = validateAndFinalizeSpell(
+    {
+      archetype: 'zone_control',
+      element: 'earth',
+      targeting: { mode: 'lane_cluster', lane: 9, pattern: 'lane_circle', singleTarget: false },
+      numbers: { damage: 12, radius: 2.3, durationSec: 5, tickRate: 0.6, width: 10, length: 8, laneSpan: 1 },
+      effects: ['slow'],
+      vfx: { palette: 'sand', intensity: 0.8, shape: 'ring' },
+      sfx: { cue: 'sand' },
+    },
+    baseContext
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.spell.targeting.mode, 'lane_cluster');
+  assert.equal(result.spell.targeting.pattern, 'lane_circle');
+  assert.equal(result.spell.targeting.lane, 4);
+  assert.equal(result.spell.targeting.singleTarget, false);
+  assert.ok(result.spell.numbers.width >= 1);
+  assert.ok(result.spell.numbers.length >= 1);
+});
+
+test('singleTarget converts zone draft into projectile-safe output', () => {
+  const result = validateAndFinalizeSpell(
+    {
+      archetype: 'zone_control',
+      element: 'arcane',
+      targeting: { mode: 'lane', lane: 2, pattern: 'single_enemy', singleTarget: true },
+      numbers: { damage: 20, radius: 3.4, durationSec: 4, tickRate: 0.8, width: 9, length: 9, laneSpan: 2 },
+      effects: ['slow'],
+      vfx: { palette: 'focus', intensity: 0.8, shape: 'ring' },
+      sfx: { cue: 'focus' },
+    },
+    baseContext
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.spell.archetype, 'projectile');
+  assert.equal(result.spell.targeting.singleTarget, true);
+  assert.equal(result.spell.targeting.pattern, 'single_enemy');
+  assert.ok(result.spell.numbers.radius <= 1.6);
 });

@@ -197,7 +197,7 @@ async function fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, op
     parallel_tool_calls: false,
     tools: [tool],
     instructions:
-      'You are a spell balancer. Return exactly one craft_spell tool call only. Prioritize valid output for a real-time action game.',
+      'You are a spell balancer. Return exactly one craft_spell tool call only. Prioritize valid output for a real-time action game. Use targeting.pattern/targeting.singleTarget and numbers.width/numbers.length to match prompt geometry (single hit, lane circle, lane sweep).',
     input: [
       {
         role: 'user',

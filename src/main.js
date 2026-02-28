@@ -570,11 +570,24 @@ function castBolt() {
   return castChainFromConfig({
     archetype: 'chain',
     element: 'storm',
-    targeting: { mode: 'front_cluster' },
-    numbers: { damage: 42, radius: 2.1, durationSec: 0, chainCount: 4 },
+    targeting: { mode: 'front_cluster', pattern: 'single_enemy', singleTarget: false },
+    numbers: { damage: 42, radius: 2.1, durationSec: 0, chainCount: 4, width: 4, length: 6, laneSpan: 1 },
     effects: ['stun'],
     vfx: { intensity: 1.1, shape: 'arc' },
   });
+}
+
+function projectileGeometryForShape(shape, baseRadius) {
+  if (shape === 'ring') {
+    return new THREE.TorusGeometry(baseRadius, Math.max(0.08, baseRadius * 0.3), 10, 18);
+  }
+  if (shape === 'wall') {
+    return new THREE.BoxGeometry(baseRadius * 1.7, baseRadius * 1.2, baseRadius * 0.9);
+  }
+  if (shape === 'arc') {
+    return new THREE.ConeGeometry(baseRadius * 0.9, baseRadius * 2.1, 9);
+  }
+  return new THREE.SphereGeometry(baseRadius, 12, 12);
 }
 
 function castProjectileFromConfig(spell, archetype = 'projectile') {
@@ -585,26 +598,40 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
   }
 
   const power = clamp(Number(spell?.vfx?.intensity || 0.85), 0.2, 1.4);
+  const shape = ['orb', 'ring', 'wall', 'arc'].includes(spell?.vfx?.shape) ? spell.vfx.shape : 'orb';
+  const shapeSize = clamp(Number(spell?.vfx?.size ?? 1), 0.4, 2.2);
+  const baseRadius = (archetype === 'aoe_burst' ? 0.62 : 0.5) * shapeSize;
   const elementColor = colorForElement(spell?.element);
-  const orb = new THREE.Mesh(
-    new THREE.SphereGeometry(archetype === 'aoe_burst' ? 0.62 : 0.5, 10, 10),
+  const projectileMesh = new THREE.Mesh(
+    projectileGeometryForShape(shape, baseRadius),
     new THREE.MeshStandardMaterial({
       color: elementColor.base,
       emissive: elementColor.emissive,
       emissiveIntensity: 0.55 + power * 0.45,
     })
   );
-  orb.position.copy(commander.mesh.position).add(new THREE.Vector3(0, 1.8, -0.5));
-  orb.castShadow = true;
-  scene.add(orb);
+  projectileMesh.position.copy(commander.mesh.position).add(new THREE.Vector3(0, 1.8, -0.5));
+  if (shape === 'arc') {
+    projectileMesh.rotation.x = Math.PI * 0.5;
+  }
+  projectileMesh.castShadow = true;
+  scene.add(projectileMesh);
 
   projectiles.push({
     kind: archetype,
-    mesh: orb,
+    mesh: projectileMesh,
     target,
     speed: clamp(Number(spell?.numbers?.speed || 30), 8, 44),
     damage: clamp(Number(spell?.numbers?.damage || 24), 8, 150),
-    splash: clamp(Number(spell?.numbers?.radius || (archetype === 'aoe_burst' ? 3.4 : 2.0)), 0.8, 8),
+    splash: clamp(
+      Number(
+        spell?.targeting?.singleTarget
+          ? spell?.numbers?.radius || 1.0
+          : spell?.numbers?.radius || (archetype === 'aoe_burst' ? 3.4 : 2.0)
+      ),
+      0.8,
+      8
+    ),
     effects: Array.isArray(spell?.effects) ? spell.effects : [],
     element: spell?.element || 'arcane',
     intensity: power,
@@ -619,11 +646,19 @@ function castZoneFromConfig(spell) {
   const damage = clamp(Number(spell?.numbers?.damage || 12), 1, 120);
   const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.8), 0.2, 2);
   const effects = Array.isArray(spell?.effects) ? spell.effects : [];
+  const element = spell?.element || 'arcane';
+  const color = colorForElement(element).base;
+  const shape = String(spell?.vfx?.shape || 'ring');
+  const targetingPattern = String(spell?.targeting?.pattern || '');
+  const width = clamp(Number(spell?.numbers?.width || radius * 2), 1, MAP_WIDTH - 2);
+  const length = clamp(Number(spell?.numbers?.length || radius * 2), 1, 120);
   const lane = chooseLaneForZone(spell?.targeting);
-  const z = zoneZForTargeting(spell?.targeting);
-  const color = colorForElement(spell?.element).base;
+  const z = zoneZForTargeting(spell?.targeting, lane);
+  const laneSpan = laneSpanFromNumbers(spell?.numbers, width, targetingPattern === 'lane_sweep');
+  const laneBounds = laneBoundsForSpan(lane, laneSpan);
+  const centerX = laneCenterXFromBounds(laneBounds);
 
-  if (spell?.vfx?.shape === 'wall') {
+  if (shape === 'wall') {
     if (walls.length >= 6) {
       setToast('Too many active walls');
       return false;
@@ -646,20 +681,69 @@ function castZoneFromConfig(spell) {
       duration,
     });
     zones.push({
+      kind: 'wall_aura',
       mesh: wall,
-      lane,
+      laneMin: lane,
+      laneMax: lane,
       radius,
       z,
       damage: damage * 0.35,
       duration,
       tickRate,
       effects,
+      element,
       timer: 0,
       isLinkedWall: true,
     });
+  } else if (shape === 'wave' || targetingPattern === 'lane_sweep') {
+    const activeWaves = zones.filter((zone) => zone.kind === 'wave').length;
+    if (activeWaves >= 4) {
+      setToast('Too many active sweep spells');
+      return false;
+    }
+
+    const laneCoverage = laneBounds.laneMax - laneBounds.laneMin + 1;
+    const waveWidth = clamp(Math.max(width, laneCoverage * LANE_SPACING - 1.4), 6, MAP_WIDTH - 2);
+    const hitDepth = clamp(radius, 1, 5);
+    const wave = new THREE.Mesh(
+      new THREE.BoxGeometry(waveWidth, 2.8, Math.max(1.2, hitDepth * 2)),
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.32,
+        transparent: true,
+        opacity: 0.68,
+      })
+    );
+    wave.position.set(centerX, 1.45, z);
+    wave.castShadow = true;
+    scene.add(wave);
+
+    const travelSpeed = clamp(Number(spell?.numbers?.speed || 14), 6, 26);
+    const travelLength = clamp(length, 8, 90);
+    zones.push({
+      kind: 'wave',
+      mesh: wave,
+      laneMin: laneBounds.laneMin,
+      laneMax: laneBounds.laneMax,
+      radius: hitDepth,
+      z,
+      minZ: z - travelLength,
+      damage,
+      duration,
+      tickRate,
+      effects,
+      element,
+      speed: travelSpeed,
+      pushPerSecond: clamp(7 + Number(spell?.vfx?.intensity || 0.9) * 8, 5, 20),
+      timer: 0,
+      isLinkedWall: false,
+    });
   } else {
+    const halfWidth = clamp(Math.max(width * 0.5, laneBounds.span * 3.1), 2.2, MAP_WIDTH * 0.45);
+    const halfLength = clamp(Math.max(length * 0.5, radius), 1.4, 12);
     const ring = new THREE.Mesh(
-      new THREE.CylinderGeometry(radius, radius, 0.45, 24, 1, true),
+      new THREE.CylinderGeometry(1, 1, 0.45, 24, 1, true),
       new THREE.MeshStandardMaterial({
         color,
         emissive: color,
@@ -668,17 +752,21 @@ function castZoneFromConfig(spell) {
         opacity: 0.7,
       })
     );
-    ring.position.set(laneX(lane), 0.24, z);
+    ring.scale.set(halfWidth, 1, halfLength);
+    ring.position.set(centerX, 0.24, z);
     scene.add(ring);
     zones.push({
+      kind: 'ring',
       mesh: ring,
-      lane,
-      radius,
+      laneMin: laneBounds.laneMin,
+      laneMax: laneBounds.laneMax,
+      radius: halfLength,
       z,
       damage,
       duration,
       tickRate,
       effects,
+      element,
       timer: 0,
       isLinkedWall: false,
     });
@@ -717,9 +805,37 @@ function castChainFromConfig(spell) {
   return true;
 }
 
+function laneSpanFromNumbers(numbers, width, enforceSweepSpan = false) {
+  const laneSpanRaw = Number(numbers?.laneSpan);
+  const explicitSpan = Number.isFinite(laneSpanRaw) ? Math.round(laneSpanRaw) : 0;
+  const widthSpan = Math.round(clamp((Number(width) || 8) / LANE_SPACING, 1, LANE_COUNT));
+  const minSpan = enforceSweepSpan ? 2 : 1;
+  return clamp(Math.max(minSpan, explicitSpan || 1, widthSpan || 1), 1, LANE_COUNT);
+}
+
+function laneBoundsForSpan(centerLane, span) {
+  const safeSpan = clamp(Math.round(span || 1), 1, LANE_COUNT);
+  let laneMin = clamp(Math.round(centerLane) - Math.floor(safeSpan / 2), 0, LANE_COUNT - safeSpan);
+  laneMin = clamp(laneMin, 0, LANE_COUNT - safeSpan);
+  return {
+    laneMin,
+    laneMax: laneMin + safeSpan - 1,
+    span: safeSpan,
+  };
+}
+
+function laneCenterXFromBounds(bounds) {
+  return laneX((bounds.laneMin + bounds.laneMax) * 0.5);
+}
+
 function chooseLaneForZone(targeting) {
-  if (targeting?.mode === 'lane' && Number.isFinite(targeting.lane)) {
+  if ((targeting?.mode === 'lane' || targeting?.mode === 'lane_cluster') && Number.isFinite(targeting.lane)) {
     return clamp(Math.round(targeting.lane), 0, LANE_COUNT - 1);
+  }
+  if (targeting?.mode === 'lane_cluster') {
+    const pressure = lanePressure();
+    const activeLane = pressure.find((entry) => enemies.some((enemy) => !enemy.dead && enemy.lane === entry.lane));
+    if (activeLane) return activeLane.lane;
   }
   if (targeting?.mode === 'front_cluster') {
     const front = [...enemies].filter((enemy) => !enemy.dead).sort((a, b) => b.mesh.position.z - a.mesh.position.z)[0];
@@ -728,7 +844,21 @@ function chooseLaneForZone(targeting) {
   return lanePressure()[0].lane;
 }
 
-function zoneZForTargeting(targeting) {
+function zoneZForTargeting(targeting, preferredLane = null) {
+  if (targeting?.mode === 'lane_cluster') {
+    const lane =
+      Number.isFinite(targeting?.lane) && targeting?.lane >= 0
+        ? clamp(Math.round(targeting.lane), 0, LANE_COUNT - 1)
+        : preferredLane ?? chooseLaneForZone(targeting);
+    const laneEnemies = enemies
+      .filter((enemy) => !enemy.dead && enemy.lane === lane)
+      .sort((a, b) => b.mesh.position.z - a.mesh.position.z);
+    if (laneEnemies.length) {
+      const sample = laneEnemies.slice(0, 3);
+      const avgZ = sample.reduce((sum, enemy) => sum + enemy.mesh.position.z, 0) / sample.length;
+      return clamp(avgZ, START_Z + 6, BASE_Z - 4);
+    }
+  }
   if (targeting?.mode === 'front_cluster') {
     const front = [...enemies].filter((enemy) => !enemy.dead).sort((a, b) => b.mesh.position.z - a.mesh.position.z)[0];
     if (front) return front.mesh.position.z;
@@ -737,11 +867,13 @@ function zoneZForTargeting(targeting) {
 }
 
 function selectTarget(targeting) {
-  if (targeting?.mode === 'lane' && Number.isFinite(targeting.lane)) {
-    const lane = clamp(Math.round(targeting.lane), 0, LANE_COUNT - 1);
+  if (targeting?.mode === 'lane' || targeting?.mode === 'lane_cluster') {
+    const lane = Number.isFinite(targeting?.lane)
+      ? clamp(Math.round(targeting.lane), 0, LANE_COUNT - 1)
+      : chooseLaneForZone(targeting);
     const laneEnemies = enemies.filter((enemy) => !enemy.dead && enemy.lane === lane);
     if (laneEnemies.length) {
-      return laneEnemies.sort((a, b) => a.mesh.position.distanceToSquared(commander.mesh.position) - b.mesh.position.distanceToSquared(commander.mesh.position))[0];
+      return laneEnemies.sort((a, b) => b.mesh.position.z - a.mesh.position.z)[0];
     }
   }
   if (targeting?.mode === 'front_cluster') {
@@ -1073,6 +1205,12 @@ function colorForElement(element) {
   return { base: 0xc59dff, emissive: 0x5d2e8a };
 }
 
+function enemyInsideZone(enemy, zone) {
+  const inLane = enemy.lane >= zone.laneMin && enemy.lane <= zone.laneMax;
+  const inDepth = Math.abs(enemy.mesh.position.z - zone.z) <= zone.radius;
+  return inLane && inDepth;
+}
+
 function updateWalls(dt) {
   for (let i = walls.length - 1; i >= 0; i -= 1) {
     const wall = walls[i];
@@ -1096,20 +1234,32 @@ function updateZones(dt) {
     }
     zone.duration -= dt;
     zone.timer += dt;
-    if (!zone.isLinkedWall) {
+
+    if (zone.kind === 'wave') {
+      zone.z -= zone.speed * dt;
+      zone.mesh.position.z = zone.z;
+      zone.mesh.material.opacity = clamp(0.2 + (zone.duration / 6) * 0.5, 0.18, 0.72);
+      zone.mesh.rotation.x = Math.sin(GAME.elapsed * 6 + i) * 0.05;
+      if (zone.z <= zone.minZ) {
+        zone.duration = 0;
+      }
+      for (const enemy of enemies) {
+        if (enemy.dead) continue;
+        if (!enemyInsideZone(enemy, zone)) continue;
+        enemy.mesh.position.z = Math.max(START_Z + 2, enemy.mesh.position.z - zone.pushPerSecond * dt);
+      }
+    } else if (!zone.isLinkedWall) {
       zone.mesh.rotation.y += dt * 0.8;
       zone.mesh.material.opacity = clamp(0.25 + (zone.duration / 6) * 0.45, 0.2, 0.72);
     }
 
-    if (zone.timer >= zone.tickRate) {
-      zone.timer = 0;
+    while (zone.timer >= zone.tickRate) {
+      zone.timer -= zone.tickRate;
       for (const enemy of enemies) {
         if (enemy.dead) continue;
-        const inLane = enemy.lane === zone.lane;
-        const inZ = Math.abs(enemy.mesh.position.z - zone.z) <= zone.radius;
-        if (inLane && inZ) {
+        if (enemyInsideZone(enemy, zone)) {
           damageEnemy(enemy, zone.damage * zone.tickRate);
-          applyImpactEffects(enemy, zone.effects, 'arcane', 0.7);
+          applyImpactEffects(enemy, zone.effects, zone.element || 'arcane', zone.kind === 'wave' ? 0.95 : 0.7);
         }
       }
     }
