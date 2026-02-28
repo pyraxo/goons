@@ -10,6 +10,7 @@ import {
 } from './src/prompt/templateDrafts.js';
 import { parseArtifactOutputText } from './src/prompt/artifactContract.js';
 import { parseEstimateOutputText } from './src/prompt/estimateContract.js';
+import { handleSpellGenerate } from './server/spell-api.js';
 
 const RESPONSES_API_URL = 'https://api.openai.com/v1/responses';
 const FAST_ESTIMATOR_MODEL = 'gpt-5.3-codex';
@@ -61,6 +62,12 @@ function safeParseJson(text) {
       error: error instanceof Error ? error.message : 'invalid JSON',
     };
   }
+}
+
+function makeRequestId() {
+  const stamp = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${stamp}-${rand}`;
 }
 
 function estimateFromPrompt(prompt, apiKey) {
@@ -518,6 +525,30 @@ export default defineConfig(({ mode }) => {
                   upstream: upstreamJson,
                 })
               );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'unknown error';
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: message }));
+            }
+          });
+
+          server.middlewares.use('/api/spells/generate', async (req, res) => {
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Method not allowed' }));
+              return;
+            }
+
+            try {
+              const body = await readJsonBody(req);
+              const result = await handleSpellGenerate(body, {
+                requestId: makeRequestId(),
+              });
+              res.statusCode = result.status;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(result.payload));
             } catch (error) {
               const message = error instanceof Error ? error.message : 'unknown error';
               res.statusCode = 500;

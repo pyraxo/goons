@@ -192,6 +192,7 @@ let estimateInFlight = false;
 let lastTime = performance.now();
 let toastTimer = 0;
 let resetInFlight = false;
+let spellRequestInFlight = false;
 
 window.addEventListener('resize', onResize);
 window.addEventListener('keydown', onKeyDown);
@@ -207,7 +208,7 @@ dom.commandInput.addEventListener('keydown', (event) => {
     dom.commandInput.value = '';
     closeCommand();
     if (value) {
-      engineSystems.castFromPrompt(value);
+      void handleSpellCommand(value);
     }
   }
 
@@ -443,6 +444,7 @@ async function resetSandboxToTemplate(reason) {
     input.d = false;
     lastEstimate = null;
     estimateInFlight = false;
+    spellRequestInFlight = false;
     dom.promptInput.value = '';
     dom.commandInput.value = '';
     dom.preview.hidden = true;
@@ -469,6 +471,58 @@ async function resetSandboxToTemplate(reason) {
   }
 }
 
+async function handleSpellCommand(rawPrompt) {
+  if (spellRequestInFlight) {
+    setToast('Spellcrafting in progress');
+    return;
+  }
+
+  if (GAME.globalCooldown > 0) {
+    engineSystems.castFromPrompt(rawPrompt);
+    return;
+  }
+
+  spellRequestInFlight = true;
+  try {
+    const response = await fetch('/api/spells/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify(engineSystems.buildSpellGenerationContext(rawPrompt)),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const casted = engineSystems.castFromGeneratedSpell(payload?.spell);
+    if (!casted) {
+      engineSystems.castFromPrompt(rawPrompt);
+      return;
+    }
+
+    if (payload?.source === 'fallback') {
+      const reason = payload?.meta?.fallbackReason ? ` (${payload.meta.fallbackReason})` : '';
+      setToast(`Fallback cast${reason}`);
+      return;
+    }
+
+    const effectText =
+      Array.isArray(payload?.spell?.effects) && payload.spell.effects.length > 0
+        ? payload.spell.effects.join('+')
+        : 'none';
+    setToast(`LLM: ${payload?.spell?.archetype || 'spell'}/${effectText}`);
+  } catch (error) {
+    console.warn('[main] spell generation failed, falling back to local parser', error);
+    engineSystems.castFromPrompt(rawPrompt);
+  } finally {
+    spellRequestInFlight = false;
+  }
+}
+
 function animate() {
   const now = performance.now();
   const dt = Math.min(0.05, (now - lastTime) / 1000);
@@ -480,6 +534,7 @@ function animate() {
     engineSystems.updateSpawning(dt);
     engineSystems.updateResources(dt);
     engineSystems.updateWalls(dt);
+    engineSystems.updateZones(dt);
     engineSystems.updateEnemies(dt);
     engineSystems.updateProjectiles(dt);
     mechanicRuntime.tick(

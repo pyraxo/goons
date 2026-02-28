@@ -20,6 +20,7 @@ You still have classic spell casting, but prompts now target broader game layers
   - auto-disable on errors/budget violations
 - Added agentic apply workflow (`src/runtime/agenticApplyWorkflow.js`) that validates mechanics, activates runtime hooks, persists sandbox state, and triggers asset generation.
 - Added GLB asset generation endpoint (`/api/assets/generate-glb`) that writes generated placeholders to `public/models/generated/*`.
+- Added spellcraft tool-calling endpoint (`/api/spells/generate`) that drafts spell configs through function-calling (`craft_spell`) with deterministic fallback when model output is invalid/incomplete.
 - Enemy visuals now use an animated FBX goblin pipeline (Mixamo walk) with texture-based materials.
 
 ## Gameplay baseline
@@ -63,6 +64,8 @@ OPENAI_API_KEY=sk-...
 - `src/game/config.js`: gameplay constants and initial state
 - `src/game/economy.js`: Gold reservation/commit/refund store
 - `src/game/engineSystems.js`: combat, waves, spawning, spell casting, runtime command application
+- `server/spell-engine.js`: spell schema, balancing, normalization, deterministic fallback logic
+- `server/spell-api.js`: tool-calling orchestration and telemetry for `/api/spells/generate`
 - `src/game/world.js`: map + commander construction helpers
 - `src/prompt/costEstimator.js`: prompt type/cost/risk estimation client
 - `src/prompt/promptProcessor.js`: queueing, retries, apply history, Gold reservation flow
