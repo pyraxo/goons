@@ -12,7 +12,9 @@ const metrics = {
   providerLatencyMs: [],
 };
 
-const MODEL = process.env.OPENAI_MODEL || 'gpt-5';
+import { OPENAI_MODEL } from '../config.js';
+
+const MODEL = OPENAI_MODEL;
 const API_TIMEOUT_MS = Number(process.env.SPELL_API_TIMEOUT_MS || 10000);
 const DEBUG_FULL_PAYLOAD = process.env.SPELL_API_DEBUG_FULL_PAYLOAD !== '0';
 const REASONING_EFFORT = process.env.SPELL_REASONING_EFFORT || 'minimal';

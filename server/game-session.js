@@ -115,7 +115,6 @@ export class ServerGameSession {
     this.zones = [];
     this.runtimeGoldMultipliers = new Map();
     this.activeDots = new Map();
-    this.spellCooldowns = new Map();
     this.lastTickAt = Date.now();
     this.spawnTimer = 0;
     this.waveTimer = 0;
@@ -136,25 +135,21 @@ export class ServerGameSession {
     this.spells = {
       fireball: {
         cost: 16,
-        cooldown: 0.6,
         description: 'Auto-targets nearest enemy and explodes.',
         cast: () => this.castFireball(),
       },
       wall: {
         cost: 24,
-        cooldown: 3,
         description: 'Summons a lane wall to stall enemies.',
         cast: () => this.castWall(),
       },
       frost: {
         cost: 32,
-        cooldown: 7,
         description: 'Freezes enemies in all lanes for 2s.',
         cast: () => this.castFrost(),
       },
       bolt: {
         cost: 38,
-        cooldown: 4,
         description: 'Chain lightning strikes multiple enemies.',
         cast: () => this.castBolt(),
       },
@@ -207,7 +202,6 @@ export class ServerGameSession {
     this.zones = [];
     this.runtimeGoldMultipliers.clear();
     this.activeDots.clear();
-    this.spellCooldowns.clear();
     this.spawnTimer = 0;
     this.waveTimer = 0;
     this.comboCount = 0;
@@ -270,17 +264,6 @@ export class ServerGameSession {
       return false;
     }
 
-    if (enforceCosts && this.game.globalCooldown > 0) {
-      if (showToast) this.nowToast('Global cooldown active');
-      return false;
-    }
-
-    const cooldown = this.spellCooldowns.get(spellName) || 0;
-    if (enforceCosts && cooldown > 0) {
-      if (showToast) this.nowToast(`${spellName} cooldown ${cooldown.toFixed(1)}s`);
-      return false;
-    }
-
     if (enforceCosts && this.game.mana < spell.cost) {
       if (showToast) this.nowToast('Not enough mana');
       return false;
@@ -291,8 +274,6 @@ export class ServerGameSession {
 
     if (enforceCosts) {
       this.game.mana -= spell.cost;
-      this.spellCooldowns.set(spellName, spell.cooldown);
-      this.game.globalCooldown = 0.2;
     }
 
     if (showToast) {
@@ -898,12 +879,6 @@ export class ServerGameSession {
 
   updateResources(dt) {
     this.game.mana = clamp(this.game.mana + this.game.manaRegen * dt, 0, this.game.maxMana);
-    this.game.globalCooldown = Math.max(0, this.game.globalCooldown - dt);
-
-    for (const key of Object.keys(this.spells)) {
-      const left = Math.max(0, (this.spellCooldowns.get(key) || 0) - dt);
-      this.spellCooldowns.set(key, left);
-    }
 
     this.tickRuntimeMultipliers(dt);
     this.comboTimer = Math.max(0, this.comboTimer - dt);
@@ -960,11 +935,6 @@ export class ServerGameSession {
       };
     }
 
-    if (this.game.globalCooldown > 0) {
-      this.nowToast('Global cooldown active');
-      return { ok: false, message: this.lastToast.message, source: 'local' };
-    }
-
     try {
       const result = await handleSpellGenerate(
         {
@@ -1018,14 +988,9 @@ export class ServerGameSession {
   castGeneratedSpell(spell) {
     if (!spell || typeof spell !== 'object') return false;
     const cost = Number(spell?.cost?.mana);
-    const cooldown = Number(spell?.cost?.cooldownSec);
 
     if (!Number.isFinite(cost) || cost <= 0 || this.game.mana < cost) {
       this.nowToast('Not enough mana');
-      return false;
-    }
-    if (this.game.globalCooldown > 0) {
-      this.nowToast('Global cooldown active');
       return false;
     }
 
@@ -1096,10 +1061,6 @@ export class ServerGameSession {
     }
 
     this.game.mana -= cost;
-    this.game.globalCooldown = 0.2;
-    if (Number.isFinite(cooldown) && cooldown > 0) {
-      this.spellCooldowns.set('fireball', Math.max(this.spellCooldowns.get('fireball') || 0, cooldown * 0.25));
-    }
     return true;
   }
 

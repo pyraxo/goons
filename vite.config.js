@@ -14,8 +14,6 @@ import { handleSpellGenerate } from './server/spell-api.js';
 import { createServerGameSession } from './server/game-session.js';
 
 const RESPONSES_API_URL = 'https://api.openai.com/v1/responses';
-const FAST_ESTIMATOR_MODEL = 'gpt-5.3-codex';
-const GLB_ASSET_MODEL = 'gpt-5.3-codex';
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -71,7 +69,7 @@ function makeRequestId() {
   return `${stamp}-${rand}`;
 }
 
-function estimateFromPrompt(prompt, apiKey) {
+function estimateFromPrompt(prompt, apiKey, model) {
   return fetch(RESPONSES_API_URL, {
     method: 'POST',
     headers: {
@@ -79,7 +77,7 @@ function estimateFromPrompt(prompt, apiKey) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: FAST_ESTIMATOR_MODEL,
+      model,
       input: [
         {
           role: 'system',
@@ -181,7 +179,7 @@ function fallbackAssetPlan(jobs) {
   }));
 }
 
-async function planGlbAssetsWithModel(prompt, jobs, apiKey) {
+async function planGlbAssetsWithModel(prompt, jobs, apiKey, model) {
   if (!apiKey || !Array.isArray(jobs) || jobs.length === 0) {
     return fallbackAssetPlan(jobs);
   }
@@ -194,7 +192,7 @@ async function planGlbAssetsWithModel(prompt, jobs, apiKey) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: GLB_ASSET_MODEL,
+        model,
         input: [
           {
             role: 'system',
@@ -323,13 +321,13 @@ function createMinimalGlbBuffer({ name, description, prompt }) {
   return glb;
 }
 
-async function generateGlbAssets({ promptId, prompt, jobs, apiKey }) {
+async function generateGlbAssets({ promptId, prompt, jobs, apiKey }, model) {
   const safeJobs = Array.isArray(jobs) ? jobs.slice(0, 8) : [];
   if (safeJobs.length === 0) {
     return [];
   }
 
-  const plan = await planGlbAssetsWithModel(prompt, safeJobs, apiKey);
+  const plan = await planGlbAssetsWithModel(prompt, safeJobs, apiKey, model);
   const planById = new Map(plan.map((entry) => [String(entry.assetId), entry]));
 
   const outputDir = resolve(process.cwd(), 'public/models/generated');
@@ -363,7 +361,7 @@ async function generateGlbAssets({ promptId, prompt, jobs, apiKey }) {
       sourceId: String(job?.sourceId ?? ''),
       path: `/models/generated/${fileName}`,
       generatedAt,
-      model: apiKey ? GLB_ASSET_MODEL : 'local-fallback',
+      model: apiKey ? model : 'local-fallback',
     });
   }
 
@@ -376,8 +374,12 @@ export default defineConfig(({ mode }) => {
   const apiKey = process.env.OPENAI_API_KEY;
   const backendHost = process.env.SPELL_BACKEND_HOST || '127.0.0.1';
   const backendPort = Number(process.env.SPELL_BACKEND_PORT || 8787);
+  const openaiModel = process.env.OPENAI_MODEL || 'gpt-5-nano';
 
   return {
+    define: {
+      'process.env.OPENAI_MODEL': JSON.stringify(openaiModel),
+    },
     plugins: [
       {
         name: 'openai-api-key-endpoints',
@@ -518,7 +520,7 @@ export default defineConfig(({ mode }) => {
                 return;
               }
 
-              const upstream = await estimateFromPrompt(prompt, apiKey);
+              const upstream = await estimateFromPrompt(prompt, apiKey, openaiModel);
               const upstreamText = await upstream.text();
               if (!upstream.ok) {
                 res.statusCode = upstream.status;
@@ -692,12 +694,10 @@ export default defineConfig(({ mode }) => {
                 return;
               }
 
-              const assets = await generateGlbAssets({
-                promptId,
-                prompt,
-                jobs,
-                apiKey,
-              });
+              const assets = await generateGlbAssets(
+                { promptId, prompt, jobs, apiKey },
+                openaiModel
+              );
 
               res.statusCode = 200;
               res.setHeader('Content-Type', 'application/json');

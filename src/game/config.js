@@ -25,7 +25,6 @@ export function createInitialGameState() {
     elapsed: 0,
     kills: 0,
     unlocks: ['fireball', 'wall'],
-    globalCooldown: 0,
     gameOver: false,
   };
 }

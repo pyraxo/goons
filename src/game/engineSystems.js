@@ -48,7 +48,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
   const projectiles = [];
   const walls = [];
   const zones = [];
-  const spellCooldowns = new Map();
   const runtimeGoldMultipliers = new Map();
   const activeDots = new Map();
   let runtimeHooks = null;
@@ -547,13 +546,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     const archetype = String(spell.archetype || 'projectile');
     const cost = spell.cost || {};
     const manaCost = clamp(Number(cost.mana || 12), 8, 65);
-    const cooldown = clamp(Number(cost.cooldownSec || 0.6), 0.2, 10);
-    const spellCd = spellCooldowns.get(archetype) || 0;
-
-    if (spellCd > 0) {
-      onToast(`${archetype} cooldown ${spellCd.toFixed(1)}s`);
-      return false;
-    }
 
     if (game.mana < manaCost) {
       onToast('Not enough mana');
@@ -574,8 +566,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     }
 
     game.mana -= manaCost;
-    spellCooldowns.set(archetype, cooldown);
-    game.globalCooldown = 0.2;
     onHudChanged?.();
     return true;
   }
@@ -630,25 +620,21 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
   const spells = {
     fireball: {
       cost: 16,
-      cooldown: 0.6,
       description: 'Auto-targets nearest enemy and explodes.',
       cast: castFireball,
     },
     wall: {
       cost: 24,
-      cooldown: 3,
       description: 'Summons a lane wall to stall enemies.',
       cast: castWall,
     },
     frost: {
       cost: 32,
-      cooldown: 7,
       description: 'Freezes enemies in all lanes for 2s.',
       cast: castFrost,
     },
     bolt: {
       cost: 38,
-      cooldown: 4,
       description: 'Chain lightning strikes multiple enemies.',
       cast: castBolt,
     },
@@ -705,21 +691,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       return false;
     }
 
-    if (enforceCosts && game.globalCooldown > 0) {
-      if (showToast) {
-        onToast('Global cooldown active');
-      }
-      return false;
-    }
-
-    const spellCd = spellCooldowns.get(spellName) || 0;
-    if (enforceCosts && spellCd > 0) {
-      if (showToast) {
-        onToast(`${spellName} cooldown ${spellCd.toFixed(1)}s`);
-      }
-      return false;
-    }
-
     if (enforceCosts && game.mana < spell.cost) {
       if (showToast) {
         onToast('Not enough mana');
@@ -734,8 +705,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
     if (enforceCosts) {
       game.mana -= spell.cost;
-      spellCooldowns.set(spellName, spell.cooldown);
-      game.globalCooldown = 0.2;
     }
     if (showToast) {
       onToast(`Cast ${spellName}: ${spell.description}`);
@@ -1212,16 +1181,10 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
   function updateResources(dt) {
     game.mana = clamp(game.mana + game.manaRegen * dt, 0, game.maxMana);
-    game.globalCooldown = Math.max(0, game.globalCooldown - dt);
     tickRuntimeMultipliers(dt);
     comboTimer = Math.max(0, comboTimer - dt);
     if (comboTimer === 0) {
       comboCount = 0;
-    }
-
-    for (const key of spellCooldowns.keys()) {
-      const left = Math.max(0, (spellCooldowns.get(key) || 0) - dt);
-      spellCooldowns.set(key, left);
     }
   }
 
@@ -1328,7 +1291,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
     activeDots.clear();
     runtimeGoldMultipliers.clear();
-    spellCooldowns.clear();
     spawnTimer = 0;
     waveTimer = 0;
     comboCount = 0;

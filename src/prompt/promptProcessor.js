@@ -1,7 +1,9 @@
+import { OPENAI_MODEL } from '../../config.js';
+
 export const MODEL_PRESET_MAP = {
-  fast: 'gpt-5.3-codex',
-  medium: 'gpt-5.3-codex',
-  high: 'gpt-5.3-codex',
+  fast: OPENAI_MODEL,
+  medium: OPENAI_MODEL,
+  high: OPENAI_MODEL,
 };
 export const REASONING_EFFORT_PRESET_MAP = {
   fast: 'low',

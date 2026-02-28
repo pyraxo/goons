@@ -1,10 +1,8 @@
+import '../env.js';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { inspect } from 'node:util';
 import { getSpellApiMetrics, handleSpellGenerate } from './spell-api.js';
-
-loadEnvFile();
+import { OPENAI_MODEL } from '../config.js';
 
 const PORT = Number(process.env.SPELL_BACKEND_PORT || 8787);
 const HOST = process.env.SPELL_BACKEND_HOST || '127.0.0.1';
@@ -24,7 +22,7 @@ const server = createServer(async (req, res) => {
       ok: true,
       service: 'spell-backend',
       hasApiKey: Boolean(process.env.OPENAI_API_KEY),
-      model: process.env.OPENAI_MODEL || 'gpt-5',
+      model: OPENAI_MODEL,
       telemetry: getSpellApiMetrics(),
     });
     return;
@@ -66,7 +64,7 @@ server.listen(PORT, HOST, () => {
   console.log(`[spell-backend] listening on http://${HOST}:${PORT}`);
   logStructured('log', '[spell-backend] env', {
     hasApiKey: Boolean(process.env.OPENAI_API_KEY),
-    model: process.env.OPENAI_MODEL || 'gpt-5',
+    model: OPENAI_MODEL,
     timeoutMs: Number(process.env.SPELL_API_TIMEOUT_MS || 10000),
   });
 });
@@ -135,36 +133,6 @@ function logStructured(level, label, payload) {
     sorted: true,
   });
   console[level](`${label} ${msg}`);
-}
-
-function loadEnvFile() {
-  const envPath = resolve(process.cwd(), '.env');
-  if (!existsSync(envPath)) {
-    return;
-  }
-
-  const content = readFileSync(envPath, 'utf8');
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue;
-    }
-
-    const idx = trimmed.indexOf('=');
-    if (idx === -1) {
-      continue;
-    }
-
-    const key = trimmed.slice(0, idx).trim();
-    let value = trimmed.slice(idx + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-
-    if (!(key in process.env)) {
-      process.env[key] = value;
-    }
-  }
 }
 
 function makeRequestId() {

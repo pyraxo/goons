@@ -217,8 +217,7 @@ function computePowerScore(spell) {
 
 function deriveCost(powerScore) {
   const mana = Math.round(clampNumber(8 + powerScore * 0.42, 8, 65));
-  const cooldownSec = round2(clampNumber(0.25 + powerScore * 0.052, 0.25, 10));
-  return { mana, cooldownSec };
+  return { mana };
 }
 
 function sanitizeDraft(draft, context, warnings) {

@@ -11,6 +11,7 @@ import {
 import { disposeEnemyVisual, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
 import { estimatePrompt } from './prompt/costEstimator.js';
 import { MODEL_PRESET_MAP, PromptProcessor, REASONING_EFFORT_PRESET_MAP } from './prompt/promptProcessor.js';
+import { OPENAI_MODEL } from '../config.js';
 import { PROMPT_TEMPLATE_VERSION } from './prompt/templateDrafts.js';
 
 const LANE_COUNT = 5;
@@ -48,7 +49,6 @@ const GAME = {
   elapsed: 0,
   kills: 0,
   unlocks: ['fireball', 'wall', 'frost', 'bolt'],
-  globalCooldown: 0,
   gameOver: false,
 };
 
@@ -60,31 +60,26 @@ const BASELINE_HISTORY_TEXT =
 const SPELLS = {
   fireball: {
     cost: 16,
-    cooldown: 0.6,
     description: 'Auto-targets nearest enemy and explodes.',
     cast: castFireball,
   },
   wall: {
     cost: 24,
-    cooldown: 3,
     description: 'Summons a lane wall to stall enemies.',
     cast: castWall,
   },
   frost: {
     cost: 32,
-    cooldown: 7,
     description: 'Freezes enemies in all lanes for 2s.',
     cast: castFrost,
   },
   bolt: {
     cost: 38,
-    cooldown: 4,
     description: 'Chain lightning strikes multiple enemies.',
     cast: castBolt,
   },
 };
 
-const spellCooldowns = new Map();
 const goldReservations = new Map();
 const enemies = [];
 const projectiles = [];
@@ -704,7 +699,7 @@ function renderEstimate(estimate) {
     <div><strong>Types:</strong> ${estimate.classifiedTypes.join(', ')}</div>
     <div><strong>Risk:</strong> ${estimate.riskLevel}</div>
     <div><strong>Cost:</strong> ${estimate.estimatedGoldCost} Gold</div>
-    <div><strong>Estimator:</strong> gpt-5.3-codex (reasoning: low)</div>
+    <div><strong>Estimator:</strong> ${OPENAI_MODEL} (reasoning: low)</div>
     <div><strong>Preset Model:</strong> ${MODEL_PRESET_MAP[selectedPreset]} (reasoning: ${REASONING_EFFORT_PRESET_MAP[selectedPreset]})</div>
     <div><strong>Review Required:</strong> ${estimate.requiresReview ? 'yes' : 'no'}</div>
     <div><strong>Can Afford:</strong> ${canAfford ? 'yes' : 'no'}</div>
@@ -805,14 +800,6 @@ async function castQueuedSpell(rawPrompt, historyId) {
   if (GAME.gameOver) {
     updateSpellHistory(historyId, 'failed', 'Game over');
     return;
-  }
-
-  while (GAME.globalCooldown > 0) {
-    if (GAME.gameOver) {
-      updateSpellHistory(historyId, 'failed', 'Game over');
-      return;
-    }
-    await sleep(25);
   }
 
   markSpellHistoryCastStart(historyId);
@@ -959,16 +946,6 @@ function castFromConfig(spell) {
 
   const cost = spell.cost || {};
   const manaCost = clamp(Number(cost.mana || 12), 8, 65);
-  const cooldown = clamp(Number(cost.cooldownSec || 0.6), 0.2, 10);
-  const spellCd = spellCooldowns.get(archetype) || 0;
-
-  if (spellCd > 0) {
-    setToast(`${archetype} cooldown ${spellCd.toFixed(1)}s`);
-    return {
-      casted: false,
-      reason: `${archetype} cooldown ${spellCd.toFixed(1)}s`,
-    };
-  }
 
   if (GAME.mana < manaCost) {
     setToast('Not enough mana');
@@ -995,8 +972,6 @@ function castFromConfig(spell) {
   }
 
   GAME.mana -= manaCost;
-  spellCooldowns.set(archetype, cooldown);
-  GAME.globalCooldown = 0.2;
   refreshHud();
   return {
     casted: true,
@@ -2558,12 +2533,6 @@ function updateZones(dt) {
 
 function updateResources(dt) {
   GAME.mana = clamp(GAME.mana + GAME.manaRegen * dt, 0, GAME.maxMana);
-  GAME.globalCooldown = Math.max(0, GAME.globalCooldown - dt);
-
-  for (const key of spellCooldowns.keys()) {
-    const left = Math.max(0, (spellCooldowns.get(key) || 0) - dt);
-    spellCooldowns.set(key, left);
-  }
 }
 
 function updateHud() {
