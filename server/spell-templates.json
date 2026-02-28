@@ -1,5 +1,5 @@
 {
-  "version": "spell-templates-v1",
+  "version": "spell-templates-v2",
   "templates": [
     {
       "key": "fireball",
@@ -90,6 +90,126 @@
       "key": "dragon breath",
       "aliases": ["dragon breath", "wyrm flame", "inferno breath", "drake roar"],
       "expansion": "A cone of molten dragonfire roars forward in a sweeping stream, scorching a wide front arc with intense burn damage and pushing lighter enemies back from the blast."
+    },
+    {
+      "key": "void prison",
+      "aliases": ["void prison", "arcane prison", "astral cage", "dimensional lock", "soul lock"],
+      "expansion": "Ancient runes flare into a circular prison of void energy, binding clustered enemies in place while electric silence and tremoring shocks crack over them."
+    },
+    {
+      "key": "rune lattice",
+      "aliases": ["rune lattice", "glyph lattice", "arcane lattice", "binding glyphs", "sigil net"],
+      "expansion": "A lattice of radiant glyph sigils locks onto enemy signatures, chaining burst-light between them and amplifying vulnerability through arcane resonance."
+    },
+    {
+      "key": "holy nova",
+      "aliases": ["holy nova", "radiant nova", "divine flare", "sacred burst", "luminous detonation"],
+      "expansion": "A bright holy detonation erupts in brilliant concentric rings, burning wicked targets while briefly stunning nearby enemies and scattering weak lines of force."
+    },
+    {
+      "key": "ember cyclone",
+      "aliases": ["ember cyclone", "fire cyclone", "inferno cyclone", "flame vortex", "pyro vortex"],
+      "expansion": "A roaring vortex of ember fire sweeps forward as a twisting cyclone, burning everything in its path and shoving enemies outward with repeated knockback pulses."
+    },
+    {
+      "key": "crystal rain",
+      "aliases": ["crystal rain", "prism rain", "shard hail", "glass hail", "crystal hail"],
+      "expansion": "Hundreds of razor-edged crystal motes spiral through the air and ricochet across lanes, fragmenting damage across dense enemy groups."
+    },
+    {
+      "key": "storm maelstrom",
+      "aliases": ["storm maelstrom", "maelstrom", "thunder maelstrom", "electric spiral", "tempest whirl"],
+      "expansion": "A spinning, high-voltage maelstrom forms above the lane and tears through enemies in a sweeping storm path with shock-chain arcs and crushing slow-down pressure."
+    },
+    {
+      "key": "lunar eclipse",
+      "aliases": ["lunar eclipse", "blood eclipse", "moon eclipse", "eclipse"],
+      "expansion": "A dark moon-sigil eclipses the battlefield in chilled shadow-fire, layering burn and frost pressure while suppressing enemy coordination."
+    },
+    {
+      "key": "frostbound vault",
+      "aliases": ["frostbound vault", "ice vault", "frozen vault", "glacial vault", "arctic vault"],
+      "expansion": "A vault of crystalline frost and sharp wind rises from the ground, immobilizing front-line enemies while pummeling them with freezing projectiles from above."
+    },
+    {
+      "key": "inferno stampede",
+      "aliases": ["inferno stampede", "fire stampede", "blazing stampede", "magma stampede", "lava stampede"],
+      "expansion": "A wave of burning impact points races down the lane in staggered timing, chaining explosion pressure and staggering survivors with repeated concussion pushes."
+    },
+    {
+      "key": "moonwarden",
+      "aliases": ["moonwarden", "silver ward", "lunar ward", "moon ward", "astral ward"],
+      "expansion": "A reflective lunar ward deploys with radiant mirrors that blind and stagger incoming lines, then collapses into a delayed burst at the end of its hold."
+    },
+    {
+      "key": "gale spear",
+      "aliases": ["gale spear", "wind spear", "tempest spear", "air spear", "storm lance"],
+      "expansion": "A line-piercing gale-lance cuts across the lane at commander angle, channeling air pressure with repeated impact pulses and piercing follow-up arcs."
+    },
+    {
+      "key": "gravebrand",
+      "aliases": ["gravebrand", "dreadbrand", "curse brand", "necrotic brand"],
+      "expansion": "A black-fire brand marks enemies with unstable curse energy, increasing subsequent spell damage and causing stacked recoil when clustered."
+    },
+    {
+      "key": "void comet",
+      "aliases": ["void comet", "black comet", "dark star", "abyssal strike", "astral comet"],
+      "expansion": "A spectral comet punches through the skies and detonates on impact, shredding formations with burning arcane shock and leaving a crumbling gravity pocket behind it."
+    },
+    {
+      "key": "aurora spear",
+      "aliases": ["aurora spear", "dawn lance", "polar spear", "aurora lance", "ice storm spear"],
+      "expansion": "A luminous spear of cold fire and lightning tears down a straight lane, blending piercing electric and frost damage while destabilizing enemy lines."
+    },
+    {
+      "key": "iron tide",
+      "aliases": ["iron tide", "iron wave", "metal tide", "machined tide", "forged undertow"],
+      "expansion": "A wall of enchanted ferro-mist floods forward as armored fragments and pressure, pinning enemies in place while each step drives them farther from their footing."
+    },
+    {
+      "key": "spectral chain",
+      "aliases": ["spectral chain", "phantom chain", "soul chain", "haunted chain", "wraith chain"],
+      "expansion": "A chain of cursed apparitions lashes between enemies, dragging and stunning survivors while phantom flames eat away at clustered defenses."
+    },
+    {
+      "key": "frost cathedral",
+      "aliases": ["frost cathedral", "frozen cathedral", "glacial cathedral", "cathedral of ice"],
+      "expansion": "A monumental cathedral of mirrored ice manifests mid-lane, trapping enemies beneath a ringing dome while repeated shards fracture and chill everything that moves."
+    },
+    {
+      "key": "sunforge",
+      "aliases": ["sunforge", "solar forge", "sun hammer", "celestial forge", "sun anvil"],
+      "expansion": "A hammering sun-metal sigil crashes down and ignites a radiant circle, hardening nearby air into burning plates that punish sustained presence."
+    },
+    {
+      "key": "storm crucible",
+      "aliases": ["storm crucible", "thunder crucible", "lightning crucible", "tempest crucible", "storm crucify"],
+      "expansion": "A crackling crucible forms as lightning and gusts collide, cycling burst arcs and grinding enemies under a rotating storm cage."
+    },
+    {
+      "key": "obsidian hail",
+      "aliases": ["obsidian hail", "obsidian storm", "shard hail", "basalt hail", "black hail"],
+      "expansion": "Dark glass hailstones rain from the void-touched sky, each shard piercing and fragmenting on contact to layer crowd-control pressure across the lane."
+    },
+    {
+      "key": "miasma veil",
+      "aliases": ["miasma veil", "toxic veil", "plague veil", "corruption veil", "dread veil"],
+      "expansion": "A nauseating fog of rot and static settles low over the front lane, dulling responses and weakening armor while enemy marks persist in the cloud."
+    },
+    {
+      "key": "celestial cage",
+      "aliases": ["celestial cage", "star cage", "astral cage", "gravity cage", "heavenly prison"],
+      "expansion": "Stars align into a geometric prison around clustered foes, locking their movement while starlight jabs and electric dissonance batter trapped targets."
+    },
+    {
+      "key": "grave eclipse",
+      "aliases": ["grave eclipse", "necro eclipse", "tomb eclipse", "wraith eclipse", "dread eclipse"],
+      "expansion": "A deadened eclipse rolls over the lane, muting defenses and layering cold shadow with punishing burst at the center of clustered resistance."
+    },
+    {
+      "key": "ember labyrinth",
+      "aliases": ["ember labyrinth", "flame maze", "inferno maze", "burning labyrinth", "cinder maze"],
+      "expansion": "A fiery labyrinth of collapsing corridors spins into existence, forcing enemies to churn through burning walls while recursive embers strike from every angle."
     }
   ]
 }

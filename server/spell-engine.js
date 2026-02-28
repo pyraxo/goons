@@ -23,6 +23,51 @@ const EFFECT_WEIGHTS = {
 const ANCHOR_PROFILE_ALIASES = {
   tsunami: 'tidal surge',
   'tidal wave': 'tidal surge',
+  'void cage': 'void prison',
+  'arcane prison': 'void prison',
+  'void lock': 'void prison',
+  gravebrand: 'void prison',
+  'rune web': 'rune lattice',
+  'rune lattice': 'rune lattice',
+  'moon flare': 'holy nova',
+  'inferno cyclone': 'ember cyclone',
+  'inferno stampede': 'ember cyclone',
+  'gale spear': 'storm maelstrom',
+  'moonwarden': 'lunar eclipse',
+  'frostbound vault': 'frost',
+  'storm storm': 'storm maelstrom',
+  'void comet': 'void comet',
+  'black comet': 'void comet',
+  'astral comet': 'void comet',
+  'aurora spear': 'aurora spear',
+  'dawn spear': 'aurora spear',
+  'polar spear': 'aurora spear',
+  'iron tide': 'iron tide',
+  'metal tide': 'iron tide',
+  'spectral chain': 'spectral chain',
+  'phantom chain': 'spectral chain',
+  'soul chain': 'spectral chain',
+  'frost cathedral': 'frost cathedral',
+  'cathedral of ice': 'frost cathedral',
+  'sunforge': 'sunforge',
+  'solar forge': 'sunforge',
+  'sun anvil': 'sunforge',
+  'storm crucible': 'storm crucible',
+  'thunder crucible': 'storm crucible',
+  'obsidian hail': 'obsidian hail',
+  'black hail': 'obsidian hail',
+  'miasma veil': 'miasma veil',
+  'plague veil': 'miasma veil',
+  'corrupt veil': 'miasma veil',
+  'celestial cage': 'celestial cage',
+  'star cage': 'celestial cage',
+  'astral cage': 'celestial cage',
+  'grave eclipse': 'grave eclipse',
+  'necro eclipse': 'grave eclipse',
+  'ember labyrinth': 'ember labyrinth',
+  'flame maze': 'ember labyrinth',
+  'burning labyrinth': 'ember labyrinth',
+  'cinder maze': 'ember labyrinth',
 };
 
 const ANCHOR_PROFILES = {
@@ -110,6 +155,197 @@ const ANCHOR_PROFILES = {
     requiredEffects: ['burn', 'knockback'],
     castStyle: 'focus',
     minLength: 16,
+  },
+  'void prison': {
+    element: 'arcane',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_circle',
+    preferredShape: 'ring',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['stun', 'slow'],
+    castStyle: 'pulse',
+    minLaneSpan: 2,
+    minLength: 8,
+  },
+  'rune lattice': {
+    element: 'arcane',
+    allowedArchetypes: ['projectile', 'chain'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'crystal',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['stun'],
+    castStyle: 'pulse',
+  },
+  'holy nova': {
+    element: 'fire',
+    allowedArchetypes: ['aoe_burst'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'orb',
+    preferredTargetMode: 'nearest_enemy',
+    requiredEffects: ['burn', 'stun'],
+    castStyle: 'launch',
+  },
+  'ember cyclone': {
+    element: 'fire',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_sweep',
+    preferredShape: 'wave',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['burn', 'knockback'],
+    castStyle: 'sweep',
+    minLaneSpan: 3,
+    minLength: 20,
+  },
+  'crystal rain': {
+    element: 'arcane',
+    allowedArchetypes: ['projectile'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'crystal',
+    preferredTargetMode: 'nearest_enemy',
+    requiredEffects: ['slow'],
+    castStyle: 'launch',
+  },
+  'storm maelstrom': {
+    element: 'storm',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_sweep',
+    preferredShape: 'wave',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['stun', 'slow'],
+    castStyle: 'sweep',
+    minLaneSpan: 3,
+    minLength: 18,
+  },
+  'lunar eclipse': {
+    element: 'arcane',
+    allowedArchetypes: ['aoe_burst', 'zone_control'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'orb',
+    preferredTargetMode: 'nearest_enemy',
+    requiredEffects: ['burn', 'freeze'],
+    castStyle: 'launch',
+  },
+  'void comet': {
+    element: 'fire',
+    allowedArchetypes: ['strike'],
+    preferredPattern: 'ground_strike',
+    preferredShape: 'pillar',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['burn', 'stun'],
+    castStyle: 'smite',
+    minLength: 10,
+  },
+  'aurora spear': {
+    element: 'storm',
+    allowedArchetypes: ['beam'],
+    preferredPattern: 'line_from_caster',
+    preferredShape: 'beam',
+    preferredTargetMode: 'commander_facing',
+    requiredEffects: ['stun', 'slow'],
+    castStyle: 'focus',
+    minLength: 22,
+  },
+  'iron tide': {
+    element: 'earth',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_sweep',
+    preferredShape: 'wave',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['slow', 'knockback'],
+    castStyle: 'sweep',
+    minLaneSpan: 2,
+    minLength: 20,
+  },
+  'spectral chain': {
+    element: 'arcane',
+    allowedArchetypes: ['chain'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'arc',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['stun', 'slow'],
+    castStyle: 'pulse',
+  },
+  'frost cathedral': {
+    element: 'ice',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_circle',
+    preferredShape: 'ring',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['freeze', 'stun'],
+    castStyle: 'pulse',
+    minLaneSpan: 3,
+    minLength: 9,
+  },
+  sunforge: {
+    element: 'fire',
+    allowedArchetypes: ['aoe_burst', 'zone_control'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'orb',
+    preferredTargetMode: 'nearest_enemy',
+    requiredEffects: ['burn', 'shield_break'],
+    castStyle: 'launch',
+  },
+  'storm crucible': {
+    element: 'storm',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_sweep',
+    preferredShape: 'wave',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['stun', 'burn'],
+    castStyle: 'sweep',
+    minLaneSpan: 2,
+    minLength: 18,
+  },
+  'obsidian hail': {
+    element: 'arcane',
+    allowedArchetypes: ['projectile'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'crystal',
+    preferredTargetMode: 'nearest',
+    requiredEffects: ['stun'],
+    castStyle: 'pulse',
+  },
+  'miasma veil': {
+    element: 'arcane',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_circle',
+    preferredShape: 'ring',
+    preferredTargetMode: 'lane_cluster',
+    requiredEffects: ['shield_break', 'slow'],
+    castStyle: 'pulse',
+    minLaneSpan: 2,
+    minLength: 8,
+  },
+  'celestial cage': {
+    element: 'arcane',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_circle',
+    preferredShape: 'wall',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['stun', 'slow'],
+    castStyle: 'pulse',
+    minLaneSpan: 2,
+    minLength: 9,
+  },
+  'grave eclipse': {
+    element: 'arcane',
+    allowedArchetypes: ['aoe_burst', 'zone_control'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'orb',
+    preferredTargetMode: 'nearest_enemy',
+    requiredEffects: ['burn', 'freeze'],
+    castStyle: 'launch',
+  },
+  'ember labyrinth': {
+    element: 'fire',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_circle',
+    preferredShape: 'ring',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['burn', 'knockback'],
+    castStyle: 'pulse',
+    minLaneSpan: 2,
+    minLength: 10,
   },
 };
 
@@ -740,6 +976,496 @@ function createPreset(name) {
     };
   }
 
+  if (name === 'void prison') {
+    return {
+      name: 'Eclipse Bastion',
+      description: 'A resonant band of arcane sigils seals the frontline in place while discharging stuns and pressure.',
+      archetype: 'zone_control',
+      element: 'arcane',
+      targeting: { mode: 'front_cluster', pattern: 'lane_circle', singleTarget: false },
+      numbers: { damage: 24, radius: 3.2, durationSec: 4.8, tickRate: 0.72, width: 11, length: 12, laneSpan: 3, speed: 16 },
+      effects: ['stun', 'slow'],
+      vfx: {
+        palette: 'void',
+        intensity: 0.95,
+        shape: 'ring',
+        primaryColor: '#3d2b67',
+        secondaryColor: '#9f7eff',
+        trailEffect: 'shadow_wisp',
+        impactEffect: 'vortex',
+        particleDensity: 1.2,
+        screenShake: 0.4,
+      },
+      sfx: { cue: 'void-prison' },
+      castStyle: 'pulse',
+    };
+  }
+
+  if (name === 'rune lattice') {
+    return {
+      name: 'Runic Tetrad',
+      description: 'Arcane runes flare to life, detonating crystal-light into staggered, piercing strikes.',
+      archetype: 'projectile',
+      element: 'arcane',
+      targeting: { mode: 'nearest', pattern: 'single_enemy', singleTarget: true },
+      numbers: { damage: 54, radius: 1.2, durationSec: 0, speed: 34, width: 2.6, length: 5, laneSpan: 1 },
+      effects: ['stun'],
+      vfx: {
+        palette: 'rune',
+        intensity: 1.0,
+        shape: 'crystal',
+        primaryColor: '#8e64ff',
+        secondaryColor: '#d8b8ff',
+        trailEffect: 'holy_motes',
+        impactEffect: 'flash',
+        particleDensity: 1.4,
+        screenShake: 0.3,
+      },
+      sfx: { cue: 'rune-lattice' },
+      castStyle: 'pulse',
+    };
+  }
+
+  if (name === 'holy nova') {
+    return {
+      name: 'Luminous Condemnation',
+      description: 'A bright holy detonation blossoms in a halo of fire and light, burning and staggering everything near the epicenter.',
+      archetype: 'aoe_burst',
+      element: 'fire',
+      targeting: { mode: 'nearest_enemy', pattern: 'single_enemy', singleTarget: false },
+      numbers: { damage: 66, radius: 3.8, durationSec: 0, speed: 28, width: 3.1, length: 5, laneSpan: 1 },
+      effects: ['burn', 'stun'],
+      vfx: {
+        palette: 'halo',
+        intensity: 1.15,
+        shape: 'orb',
+        primaryColor: '#ffd75d',
+        secondaryColor: '#ffffff',
+        trailEffect: 'embers',
+        impactEffect: 'explosion',
+        particleDensity: 1.7,
+        screenShake: 0.65,
+      },
+      sfx: { cue: 'holy-nova' },
+      castStyle: 'launch',
+    };
+  }
+
+  if (name === 'ember cyclone') {
+    return {
+      name: 'Pyroclast Maelstrom',
+      description: 'A cyclone of ember fire sweeps across the lane, burning through clusters while driving them backward.',
+      archetype: 'zone_control',
+      element: 'fire',
+      targeting: { mode: 'front_cluster', pattern: 'lane_sweep', singleTarget: false },
+      numbers: { damage: 28, radius: 2.8, durationSec: 4.8, tickRate: 0.72, width: 21, length: 30, laneSpan: 3, speed: 14 },
+      effects: ['burn', 'knockback'],
+      vfx: {
+        palette: 'ember',
+        intensity: 1.05,
+        shape: 'wave',
+        primaryColor: '#ff5a1e',
+        secondaryColor: '#ffd08f',
+        trailEffect: 'ember_trail',
+        impactEffect: 'explosion',
+        particleDensity: 1.8,
+        screenShake: 0.52,
+      },
+      sfx: { cue: 'ember-cyclone' },
+      castStyle: 'sweep',
+    };
+  }
+
+  if (name === 'crystal rain') {
+    return {
+      name: 'Prismatic Barrage',
+      description: 'Crystalline shards split into a piercing rain of arcane fragments, each shard seeking nearby targets for quick repeated hits.',
+      archetype: 'projectile',
+      element: 'arcane',
+      targeting: { mode: 'nearest', pattern: 'single_enemy', singleTarget: true },
+      numbers: { damage: 32, radius: 1.7, durationSec: 0, speed: 36, width: 2.4, length: 6, laneSpan: 1 },
+      effects: ['slow'],
+      vfx: {
+        palette: 'crystal',
+        intensity: 1.0,
+        shape: 'crystal',
+        primaryColor: '#a38bff',
+        secondaryColor: '#dce7ff',
+        trailEffect: 'spark',
+        impactEffect: 'shatter',
+        particleDensity: 1.5,
+        screenShake: 0.26,
+      },
+      sfx: { cue: 'crystal-rain' },
+      castStyle: 'launch',
+    };
+  }
+
+  if (name === 'storm maelstrom') {
+    return {
+      name: 'Tempest Maw',
+      description: 'A rolling storm-moon maelstrom rolls through the lane, stunning and slowing enemies with repeated electroshock.',
+      archetype: 'zone_control',
+      element: 'storm',
+      targeting: { mode: 'front_cluster', pattern: 'lane_sweep', singleTarget: false },
+      numbers: { damage: 24, radius: 2.6, durationSec: 4.2, tickRate: 0.75, width: 20, length: 28, laneSpan: 3, speed: 14 },
+      effects: ['stun', 'slow'],
+      vfx: {
+        palette: 'maelstrom',
+        intensity: 1.05,
+        shape: 'wave',
+        primaryColor: '#5ca9ff',
+        secondaryColor: '#bfe2ff',
+        trailEffect: 'lightning_arc',
+        impactEffect: 'vortex',
+        particleDensity: 1.6,
+        screenShake: 0.46,
+      },
+      sfx: { cue: 'storm-maelstrom' },
+      castStyle: 'sweep',
+    };
+  }
+
+  if (name === 'lunar eclipse') {
+    return {
+      name: 'Umbra Aegis',
+      description: 'A dim eclipse burst cracks across armored fronts, chilling through shadow-fire and punishing clustered pressure.',
+      archetype: 'aoe_burst',
+      element: 'arcane',
+      targeting: { mode: 'nearest', pattern: 'single_enemy', singleTarget: false },
+      numbers: { damage: 58, radius: 3.4, durationSec: 0, speed: 30, width: 3.2, length: 6, laneSpan: 1 },
+      effects: ['burn', 'freeze'],
+      vfx: {
+        palette: 'eclipse',
+        intensity: 1.0,
+        shape: 'orb',
+        primaryColor: '#5c5f9d',
+        secondaryColor: '#ece5ff',
+        trailEffect: 'smoke',
+        impactEffect: 'flash',
+        particleDensity: 1.4,
+        screenShake: 0.5,
+      },
+      sfx: { cue: 'lunar-eclipse' },
+      castStyle: 'launch',
+    };
+  }
+
+  if (name === 'void comet') {
+    return {
+      name: 'Wormhole Comet',
+      description: 'A pitch-black comet detonates on contact, dropping stuns and burning rifts across packed enemies.',
+      archetype: 'strike',
+      element: 'fire',
+      targeting: { mode: 'front_cluster', pattern: 'ground_strike', singleTarget: false },
+      numbers: { damage: 78, radius: 3.2, durationSec: 0, speed: 22, width: 6.5, length: 7, laneSpan: 1 },
+      effects: ['burn', 'stun'],
+      vfx: {
+        palette: 'void-comet',
+        intensity: 1.2,
+        shape: 'pillar',
+        primaryColor: '#2f1e50',
+        secondaryColor: '#8c74ff',
+        trailEffect: 'shadow_wisp',
+        impactEffect: 'explosion',
+        particleDensity: 1.55,
+        screenShake: 0.7,
+      },
+      sfx: { cue: 'void-comet' },
+      castStyle: 'smite',
+    };
+  }
+
+  if (name === 'aurora spear') {
+    return {
+      name: 'Polar Crown Lance',
+      description: 'A shard of aurora and storm rips in a narrow beam, stunning and chaining cold lightning through front ranks.',
+      archetype: 'beam',
+      element: 'storm',
+      targeting: { mode: 'commander_facing', pattern: 'line_from_caster', singleTarget: false },
+      numbers: { damage: 22, radius: 2.0, durationSec: 2.8, tickRate: 0.28, width: 3.2, length: 36, laneSpan: 1, speed: 28 },
+      effects: ['stun', 'slow'],
+      vfx: {
+        palette: 'aurora',
+        intensity: 1.05,
+        shape: 'beam',
+        secondaryShape: 'ring',
+        shapeScale: 0.8,
+        shapeBlend: 0.38,
+        primaryColor: '#79d0ff',
+        secondaryColor: '#ffd7ff',
+        trailEffect: 'sparks',
+        impactEffect: 'pillar',
+        particleDensity: 1.4,
+        screenShake: 0.45,
+      },
+      sfx: { cue: 'aurora-spear' },
+      castStyle: 'focus',
+    };
+  }
+
+  if (name === 'iron tide') {
+    return {
+      name: 'Molten Iron Tide',
+      description: 'A dense current of enchanted metal and pressure rolls forward, dragging enemies across the lane while crushing their movement.',
+      archetype: 'zone_control',
+      element: 'earth',
+      targeting: { mode: 'front_cluster', pattern: 'lane_sweep', singleTarget: false },
+      numbers: { damage: 31, radius: 2.7, durationSec: 4.8, tickRate: 0.7, width: 19, length: 26, laneSpan: 2, speed: 13 },
+      effects: ['knockback', 'slow'],
+      vfx: {
+        palette: 'iron-tide',
+        intensity: 0.98,
+        shape: 'wave',
+        primaryColor: '#b39b73',
+        secondaryColor: '#6b5a40',
+        trailEffect: 'smoke',
+        impactEffect: 'ripple',
+        particleDensity: 1.1,
+        screenShake: 0.42,
+      },
+      sfx: { cue: 'iron-tide' },
+      castStyle: 'sweep',
+    };
+  }
+
+  if (name === 'spectral chain') {
+    return {
+      name: 'Wraithlink Volley',
+      description: 'Ghosted chains snap between enemies, stunning one after another while dragging clustered foes into close quarters.',
+      archetype: 'chain',
+      element: 'arcane',
+      targeting: { mode: 'front_cluster', pattern: 'single_enemy', singleTarget: false },
+      numbers: { damage: 38, radius: 2.2, durationSec: 0, chainCount: 5, width: 4.5, length: 6.5, laneSpan: 1 },
+      effects: ['stun', 'slow'],
+      vfx: {
+        palette: 'spectral',
+        intensity: 1.0,
+        shape: 'arc',
+        secondaryShape: 'crystal',
+        shapeScale: 0.7,
+        shapeBlend: 0.3,
+        primaryColor: '#7f6dff',
+        secondaryColor: '#d9d4ff',
+        trailEffect: 'shadow_wisp',
+        impactEffect: 'flash',
+        particleDensity: 1.45,
+        screenShake: 0.28,
+      },
+      sfx: { cue: 'spectral-chain' },
+      castStyle: 'pulse',
+    };
+  }
+
+  if (name === 'frost cathedral') {
+    return {
+      name: 'Cathedral of Glass',
+      description: 'A towering dome of fractured ice appears, pinning enemies in crystalline prayer while shards detonate as they struggle.',
+      archetype: 'zone_control',
+      element: 'ice',
+      targeting: { mode: 'front_cluster', pattern: 'lane_circle', singleTarget: false },
+      numbers: { damage: 23, radius: 4.0, durationSec: 3.4, tickRate: 0.68, width: 11.5, length: 11, laneSpan: 3, speed: 16 },
+      effects: ['freeze', 'stun'],
+      vfx: {
+        palette: 'cathedral',
+        intensity: 1.0,
+        shape: 'ring',
+        primaryColor: '#8ad7ff',
+        secondaryColor: '#d9f2ff',
+        trailEffect: 'frost_mist',
+        impactEffect: 'shatter',
+        particleDensity: 1.25,
+        screenShake: 0.36,
+      },
+      sfx: { cue: 'frost-cathedral' },
+      castStyle: 'pulse',
+    };
+  }
+
+  if (name === 'sunforge') {
+    return {
+      name: 'Solar Anvil',
+      description: 'A blazing sigil slams to the center of the lane, forging a searing halo that shreds armor and burns everything nearby.',
+      archetype: 'aoe_burst',
+      element: 'fire',
+      targeting: { mode: 'nearest', pattern: 'single_enemy', singleTarget: false },
+      numbers: { damage: 70, radius: 3.6, durationSec: 0, speed: 26, width: 3.3, length: 5, laneSpan: 1 },
+      effects: ['burn', 'shield_break'],
+      vfx: {
+        palette: 'sunforge',
+        intensity: 1.2,
+        shape: 'orb',
+        secondaryShape: 'beam',
+        shapeScale: 0.9,
+        shapeBlend: 0.32,
+        primaryColor: '#ffb347',
+        secondaryColor: '#ffef7a',
+        trailEffect: 'embers',
+        impactEffect: 'explosion',
+        particleDensity: 1.6,
+        screenShake: 0.56,
+      },
+      sfx: { cue: 'sunforge' },
+      castStyle: 'launch',
+    };
+  }
+
+  if (name === 'storm crucible') {
+    return {
+      name: 'Tempest Crucible',
+      description: 'A rotating chamber of violent skies gathers overhead, repeatedly shocking and driving enemies backward in a narrowing path.',
+      archetype: 'zone_control',
+      element: 'storm',
+      targeting: { mode: 'front_cluster', pattern: 'lane_sweep', singleTarget: false },
+      numbers: { damage: 27, radius: 2.7, durationSec: 4.5, tickRate: 0.72, width: 19.5, length: 27, laneSpan: 3, speed: 13 },
+      effects: ['stun', 'burn'],
+      vfx: {
+        palette: 'storm-crucible',
+        intensity: 1.08,
+        shape: 'wave',
+        primaryColor: '#56aef8',
+        secondaryColor: '#d5f0ff',
+        trailEffect: 'lightning_arc',
+        impactEffect: 'vortex',
+        particleDensity: 1.55,
+        screenShake: 0.47,
+      },
+      sfx: { cue: 'storm-crucible' },
+      castStyle: 'sweep',
+    };
+  }
+
+  if (name === 'obsidian hail') {
+    return {
+      name: 'Obsidian Barrage',
+      description: 'Black glass hail rakes across the front, each impact spawning shard bursts that seek nearby targets in quick sequence.',
+      archetype: 'projectile',
+      element: 'arcane',
+      targeting: { mode: 'nearest', pattern: 'single_enemy', singleTarget: true },
+      numbers: { damage: 34, radius: 1.8, durationSec: 0, speed: 37, width: 2.8, length: 6, laneSpan: 1 },
+      effects: ['stun'],
+      vfx: {
+        palette: 'obsidian',
+        intensity: 1.05,
+        shape: 'crystal',
+        secondaryShape: 'orb',
+        shapeScale: 0.75,
+        shapeBlend: 0.22,
+        primaryColor: '#1f1f28',
+        secondaryColor: '#8a78ff',
+        trailEffect: 'spark',
+        impactEffect: 'shatter',
+        particleDensity: 1.35,
+        screenShake: 0.22,
+      },
+      sfx: { cue: 'obsidian-hail' },
+      castStyle: 'launch',
+    };
+  }
+
+  if (name === 'miasma veil') {
+    return {
+      name: 'Plague Lattice',
+      description: 'A toxic, static fog settles on the lane, stripping shields and blunting recovery while enemies choke inside its edge.',
+      archetype: 'zone_control',
+      element: 'arcane',
+      targeting: { mode: 'lane_cluster', pattern: 'lane_circle', singleTarget: false },
+      numbers: { damage: 19, radius: 3.0, durationSec: 5, tickRate: 0.75, width: 10.5, length: 10, laneSpan: 2, speed: 16 },
+      effects: ['shield_break', 'slow'],
+      vfx: {
+        palette: 'miasma',
+        intensity: 0.95,
+        shape: 'ring',
+        primaryColor: '#5a6d3e',
+        secondaryColor: '#c9ffc4',
+        trailEffect: 'frost_mist',
+        impactEffect: 'ripple',
+        particleDensity: 1.2,
+        screenShake: 0.28,
+      },
+      sfx: { cue: 'miasma-veil' },
+      castStyle: 'pulse',
+    };
+  }
+
+  if (name === 'celestial cage') {
+    return {
+      name: 'Heavenforge Cage',
+      description: 'Star-forged bonds collapse into a strict geometry around clustered targets, stunning their escape attempts with pulse-wave pressure.',
+      archetype: 'zone_control',
+      element: 'arcane',
+      targeting: { mode: 'front_cluster', pattern: 'lane_circle', singleTarget: false },
+      numbers: { damage: 26, radius: 3.4, durationSec: 4.5, tickRate: 0.74, width: 11, length: 12, laneSpan: 3, speed: 16 },
+      effects: ['stun', 'slow'],
+      vfx: {
+        palette: 'celestial-cage',
+        intensity: 0.97,
+        shape: 'wall',
+        primaryColor: '#7a7dff',
+        secondaryColor: '#dce4ff',
+        trailEffect: 'holy_motes',
+        impactEffect: 'vortex',
+        particleDensity: 1.28,
+        screenShake: 0.41,
+      },
+      sfx: { cue: 'celestial-cage' },
+      castStyle: 'pulse',
+    };
+  }
+
+  if (name === 'grave eclipse') {
+    return {
+      name: 'Eclipse of Wills',
+      description: 'A deadened eclipse shatters forward with shadow-fire, chilling armored lines and amplifying every burn that lands in the dark zone.',
+      archetype: 'aoe_burst',
+      element: 'arcane',
+      targeting: { mode: 'nearest', pattern: 'single_enemy', singleTarget: false },
+      numbers: { damage: 61, radius: 3.8, durationSec: 0, speed: 29, width: 3.4, length: 6, laneSpan: 1 },
+      effects: ['burn', 'freeze'],
+      vfx: {
+        palette: 'grave-eclipse',
+        intensity: 1.02,
+        shape: 'orb',
+        secondaryShape: 'ring',
+        shapeScale: 0.84,
+        shapeBlend: 0.34,
+        primaryColor: '#423c63',
+        secondaryColor: '#e8e2ff',
+        trailEffect: 'smoke',
+        impactEffect: 'flash',
+        particleDensity: 1.42,
+        screenShake: 0.52,
+      },
+      sfx: { cue: 'grave-eclipse' },
+      castStyle: 'launch',
+    };
+  }
+
+  if (name === 'ember labyrinth') {
+    return {
+      name: 'Infernal Labyrinth',
+      description: 'Burning ring-walls pivot across the lane, forcing enemies through a maze of rotating cinder barriers and repeated flares.',
+      archetype: 'zone_control',
+      element: 'fire',
+      targeting: { mode: 'front_cluster', pattern: 'lane_circle', singleTarget: false },
+      numbers: { damage: 28, radius: 3.7, durationSec: 4.8, tickRate: 0.76, width: 10.5, length: 11, laneSpan: 2, speed: 15 },
+      effects: ['burn', 'knockback'],
+      vfx: {
+        palette: 'ember-labyrinth',
+        intensity: 1.07,
+        shape: 'ring',
+        primaryColor: '#ff6a2d',
+        secondaryColor: '#ffc39a',
+        trailEffect: 'ember_trail',
+        impactEffect: 'explosion',
+        particleDensity: 1.6,
+        screenShake: 0.48,
+      },
+      sfx: { cue: 'ember-labyrinth' },
+      castStyle: 'pulse',
+    };
+  }
+
   return {
     name: 'Arcane Missile',
     description: 'A shimmering bolt of raw arcane energy that homes in on the nearest foe.',
@@ -758,10 +1484,23 @@ export function deterministicFallback(prompt, context) {
   const raw = String(prompt || '').toLowerCase();
   const anchorKey = normalizeAnchorKey(context?.spellIdentity?.curatedKey || context?.spellIdentity?.anchorKey);
   const canonicalAnchor = ANCHOR_PROFILE_ALIASES[anchorKey] || anchorKey;
+  const promptAnchorChain = detectAnchorsFromPrompt(raw).filter((anchor) => ANCHOR_PROFILES[anchor]);
+  const primaryPromptAnchor = promptAnchorChain[0];
+  const secondaryPromptAnchor = promptAnchorChain[1];
 
   let presetName = 'default';
-  if (canonicalAnchor && ANCHOR_PROFILES[canonicalAnchor]) {
+  if (primaryPromptAnchor) {
+    presetName = primaryPromptAnchor;
+  } else if (canonicalAnchor && ANCHOR_PROFILES[canonicalAnchor]) {
     presetName = canonicalAnchor;
+  } else if (/(void|astral|cage|prison|lock|bind|ward|soul)/.test(raw)) {
+    presetName = 'void prison';
+  } else if (/(rune|sigil|lattice|glyph)/.test(raw)) {
+    presetName = 'rune lattice';
+  } else if (/(holy|luminous|radiant|divine|sacred|eclipse|moon)/.test(raw)) {
+    presetName = 'holy nova';
+  } else if (/(cyclone|maelstrom|whirl|vortex|inferno|ember cyclone)/.test(raw)) {
+    presetName = 'ember cyclone';
   } else if (/(tsunami|tidal|wave|surge|deluge|undertow)/.test(raw)) {
     presetName = 'tidal surge';
   } else if (/(meteor|smite|strike|sky.*bolt|divine|cataclysm|quake|earthquake|seismic)/.test(raw)) {
@@ -779,12 +1518,91 @@ export function deterministicFallback(prompt, context) {
   }
 
   const draft = createPreset(presetName);
-  const finalized = validateAndFinalizeSpell(draft, context);
+  let finalized = validateAndFinalizeSpell(draft, context);
+  if (secondaryPromptAnchor && ANCHOR_PROFILES[secondaryPromptAnchor]) {
+    applySecondaryFlavor(finalized.spell, ANCHOR_PROFILES[secondaryPromptAnchor], context);
+    applyCompatibilityRules(finalized.spell, finalized.warnings);
+    finalized = {
+      ...finalized,
+      powerScore: round2(computePowerScore(finalized.spell)),
+    };
+    finalized.spell.cost = deriveCost(finalized.powerScore);
+  }
   if (finalized.ok) {
     return finalized;
   }
 
   return validateAndFinalizeSpell(createPreset('default'), context);
+}
+
+function detectAnchorsFromPrompt(raw) {
+  const normalized = String(raw || '').toLowerCase();
+  const matched = [];
+  const dedupe = new Set();
+
+  for (const [alias, canonical] of Object.entries(ANCHOR_PROFILE_ALIASES)) {
+    if (!alias || !canonical) {
+      continue;
+    }
+    if (containsPromptToken(normalized, alias) && ANCHOR_PROFILES[canonical]) {
+      const key = canonical;
+      if (!dedupe.has(key)) {
+        dedupe.add(key);
+        matched.push(key);
+      }
+    }
+  }
+
+  for (const profileKey of Object.keys(ANCHOR_PROFILES)) {
+    if (dedupe.has(profileKey)) {
+      continue;
+    }
+    if (containsPromptToken(normalized, profileKey)) {
+      dedupe.add(profileKey);
+      matched.push(profileKey);
+    }
+  }
+
+  return matched;
+}
+
+function applySecondaryFlavor(spell, profile, context) {
+  if (!spell || !profile || !context) {
+    return;
+  }
+  if (profile.preferredShape && VFX_SHAPES.includes(profile.preferredShape)) {
+    if (!spell.vfx.secondaryShape) {
+      spell.vfx.secondaryShape = profile.preferredShape;
+      spell.vfx.shapeScale = clampNumber((spell.vfx.shapeScale || 1) * 0.8 + 0.4, 0.5, 2.6);
+      spell.vfx.shapeBlend = clampNumber((spell.vfx.shapeBlend || 0.4) + 0.16, 0, 1);
+      spell.vfx.intensity = clampNumber(spell.vfx.intensity + 0.08, 0.2, 1.4);
+    }
+  }
+
+  if (Array.isArray(profile.requiredEffects) && profile.requiredEffects.length > 0) {
+    spell.effects = uniqueEffects([...spell.effects, ...profile.requiredEffects]).slice(0, 3);
+  }
+
+  if (profile.element && profile.element !== spell.element && context?.variantContext?.mana <= 60) {
+    const hybridPrimary = sanitizeHexColor(spell.vfx.primaryColor) || defaultPrimaryColor(spell.element);
+    spell.vfx.secondaryColor = tintHexColor(sanitizeHexColor(spell.vfx.secondaryColor) || hybridPrimary, defaultSecondaryColor(profile.element), 0.14);
+    spell.vfx.particleTheme = defaultParticleTheme(profile.element);
+  }
+
+  if (profile.minLength && Number.isFinite(profile.minLength)) {
+    spell.numbers.length = clampNumber(Math.max(profile.minLength, spell.numbers.length || 1), 1, 120);
+  }
+  if (profile.minLaneSpan && Number.isFinite(profile.minLaneSpan)) {
+    spell.numbers.laneSpan = Math.max(Math.round(profile.minLaneSpan), Math.round(spell.numbers.laneSpan || 1));
+  }
+}
+
+function containsPromptToken(prompt, token) {
+  if (!token) {
+    return false;
+  }
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`).test(prompt);
 }
 
 function resolveAnchorProfile(context) {

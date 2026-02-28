@@ -284,6 +284,8 @@ MECHANICAL RULES:
 - If templateContext.expandedIntent is provided, treat it as supplemental guidance while preserving the user prompt intent.
 - Balance damage/radius/duration for fair real-time gameplay.
 - If spellIdentity.anchorPolicy is "strong", keep the spell anchored to that core fantasy (no element/archetype drift away from the anchor identity).
+- Build hybrid concepts as deliberate pairings. For prompts like "storm + ice wave", keep one primary archetype and express the secondary motif through effects + `vfx.secondaryShape` + `shapeScale`/`shapeBlend`, then adjust colors, trail theme, and screenShake.
+- Prefer combos when wording suggests layered fantasy (e.g., "rune + cyclone", "frost prison", "comet + wave", "sun + eclipse", "grave + storm"), and ensure each combo feels like two distinct mechanics in one shape.
 - Generate a fresh variant for this cast; do not mirror recentVariantSignatures.
 - Use wave/mana/nearbyEnemies as the primary driver for variant choice.
 - Keep power swing in a narrow band, roughly within +-12% of a normal cast for this anchor.
