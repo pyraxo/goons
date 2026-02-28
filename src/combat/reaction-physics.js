@@ -25,59 +25,59 @@
  */
 
 const EPSILON = 0.0001;
-const REACTION_UNIT_SCALE = 0.1;
+const REACTION_UNIT_SCALE = 0.2;
 
 export const SOURCE_IMPULSE_MULTIPLIERS = Object.freeze({
-  projectile: 1.0,
-  chain: 0.9,
-  zone_tick: 0.35,
+  projectile: 1.8,
+  chain: 1.5,
+  zone_tick: 0.7,
 });
 
 export const EFFECT_IMPULSE_MULTIPLIERS = Object.freeze({
-  knockback: 1.65,
-  stun: 1.18,
-  freeze: 0.95,
-  slow: 0.9,
-  burn: 0.88,
-  shield_break: 1.0,
+  knockback: 2.8,
+  stun: 1.8,
+  freeze: 1.3,
+  slow: 1.2,
+  burn: 1.1,
+  shield_break: 1.4,
 });
 
-export const ZONE_IMPULSE_COOLDOWN_SEC = 0.22;
+export const ZONE_IMPULSE_COOLDOWN_SEC = 0.08;
 
 /** @type {Record<string, ReactionProfile>} */
 export const REACTION_PROFILES = Object.freeze({
   melee: Object.freeze({
-    mass: 1.0,
-    drag: 6.4,
-    maxSpeedX: 7.4,
-    maxSpeedZ: 9.4,
-    poiseThreshold: 11.5,
-    poiseRecoverPerSec: 6.2,
-    poisePerImpulse: 1.0,
-    staggerSec: 0.2,
-    maxImpulse: 10.0,
+    mass: 0.6,
+    drag: 4.0,
+    maxSpeedX: 14.0,
+    maxSpeedZ: 18.0,
+    poiseThreshold: 5.0,
+    poiseRecoverPerSec: 3.0,
+    poisePerImpulse: 1.8,
+    staggerSec: 0.4,
+    maxImpulse: 22.0,
   }),
   ranged: Object.freeze({
-    mass: 0.74,
-    drag: 5.3,
-    maxSpeedX: 9.2,
-    maxSpeedZ: 11.2,
-    poiseThreshold: 8.0,
-    poiseRecoverPerSec: 5.4,
-    poisePerImpulse: 1.14,
-    staggerSec: 0.25,
-    maxImpulse: 11.4,
+    mass: 0.4,
+    drag: 3.2,
+    maxSpeedX: 18.0,
+    maxSpeedZ: 22.0,
+    poiseThreshold: 3.5,
+    poiseRecoverPerSec: 2.5,
+    poisePerImpulse: 2.2,
+    staggerSec: 0.5,
+    maxImpulse: 26.0,
   }),
   tank: Object.freeze({
-    mass: 1.75,
-    drag: 7.8,
-    maxSpeedX: 5.1,
-    maxSpeedZ: 7.0,
-    poiseThreshold: 16.8,
-    poiseRecoverPerSec: 7.2,
-    poisePerImpulse: 0.78,
-    staggerSec: 0.15,
-    maxImpulse: 8.4,
+    mass: 1.0,
+    drag: 5.0,
+    maxSpeedX: 10.0,
+    maxSpeedZ: 14.0,
+    poiseThreshold: 8.0,
+    poiseRecoverPerSec: 4.0,
+    poisePerImpulse: 1.4,
+    staggerSec: 0.3,
+    maxImpulse: 18.0,
   }),
 });
 
@@ -92,9 +92,9 @@ export function profileForEnemyKind(kind) {
  */
 export function computeImpulseVector(input) {
   const source = SOURCE_IMPULSE_MULTIPLIERS[input?.source] || 1;
-  const intensity = clamp(Number(input?.intensity) || 0.8, 0.2, 2);
+  const intensity = clamp(Number(input?.intensity) || 1.2, 0.2, 4);
   const damage = Math.max(0, Number(input?.damage) || 0);
-  const maxImpulse = Math.max(0.4, Number(input?.maxImpulse) || 8);
+  const maxImpulse = Math.max(0.4, Number(input?.maxImpulse) || 20);
   const effects = Array.isArray(input?.effects) ? input.effects : [];
 
   const enemyX = Number(input?.enemyPosition?.x) || 0;
@@ -117,7 +117,7 @@ export function computeImpulseVector(input) {
   for (const effect of effects) {
     effectMultiplier *= EFFECT_IMPULSE_MULTIPLIERS[effect] || 1;
   }
-  effectMultiplier = clamp(effectMultiplier, 0.55, 2.6);
+  effectMultiplier = clamp(effectMultiplier, 0.55, 5.0);
 
   const strength = clamp(damage * REACTION_UNIT_SCALE * intensity * source * effectMultiplier, 0, maxImpulse);
   let impulseX = dirX * strength;

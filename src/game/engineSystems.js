@@ -89,7 +89,7 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
     enemy.hp -= amount;
     if (enemy.hp > 0) {
-      enemy.hitTimer = 0.12;
+      enemy.hitTimer = 0.22;
       setEnemyAnim(enemy.visual, 'hit');
     }
   }
@@ -162,8 +162,8 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     for (const target of targets) {
       const ok = applyDotToEnemy(
         target.enemy.id,
-        Math.max(0.1, sourceDot.dps * 0.8),
-        Math.max(0.1, sourceDot.remainingSeconds * 0.8)
+        Math.max(0.1, sourceDot.dps * 0.9),
+        Math.max(0.1, sourceDot.remainingSeconds * 0.9)
       );
       if (ok) {
         applied += 1;
@@ -182,17 +182,35 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
   function spawnZap(pos, element = 'storm') {
     const palette = colorForElement(element);
+    // fat main bolt
     const bolt = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15, 0.15, 5, 6),
-      new THREE.MeshStandardMaterial({ color: palette.base, emissive: palette.emissive, emissiveIntensity: 1.0 })
+      new THREE.CylinderGeometry(0.4, 0.35, 8, 8),
+      new THREE.MeshStandardMaterial({ color: palette.base, emissive: palette.emissive, emissiveIntensity: 2.0 })
     );
-    bolt.position.set(pos.x, 2.6, pos.z);
+    bolt.position.set(pos.x, 3.5, pos.z);
     scene.add(bolt);
     projectiles.push({
       kind: 'zap',
       mesh: bolt,
-      life: 0.18,
+      life: 0.32,
     });
+    // aura glow pillar
+    const auraGlow = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.2, 1.0, 10, 8),
+      new THREE.MeshBasicMaterial({ color: palette.base, transparent: true, opacity: 0.2 })
+    );
+    auraGlow.position.set(pos.x, 4, pos.z);
+    scene.add(auraGlow);
+    projectiles.push({ kind: 'zap', mesh: auraGlow, life: 0.25 });
+    // ground ring burst
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.3, 2.5, 24),
+      new THREE.MeshBasicMaterial({ color: palette.base, transparent: true, opacity: 0.35, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(pos.x, 0.15, pos.z);
+    scene.add(ring);
+    projectiles.push({ kind: 'zap', mesh: ring, life: 0.3 });
   }
 
   function applyImpactEffects(enemy, effects, intensity = 0.8) {
@@ -201,29 +219,29 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     }
 
     if (effects.includes('burn')) {
-      enemy.burningFor = Math.max(enemy.burningFor, 2.2 * intensity);
-      enemy.burnDps = Math.max(enemy.burnDps, 4 + 8 * intensity);
+      enemy.burningFor = Math.max(enemy.burningFor, 3.5 * intensity);
+      enemy.burnDps = Math.max(enemy.burnDps, 8 + 16 * intensity);
     }
 
     if (effects.includes('freeze')) {
-      enemy.frozenFor = Math.max(enemy.frozenFor, 1.4 * intensity + 0.4);
+      enemy.frozenFor = Math.max(enemy.frozenFor, 2.2 * intensity + 0.6);
     }
 
     if (effects.includes('stun')) {
-      enemy.stunnedFor = Math.max(enemy.stunnedFor, 0.45 + intensity * 0.35);
+      enemy.stunnedFor = Math.max(enemy.stunnedFor, 0.7 + intensity * 0.6);
     }
 
     if (effects.includes('slow')) {
-      enemy.slowFor = Math.max(enemy.slowFor, 1.8 * intensity + 0.5);
-      enemy.slowFactor = Math.min(enemy.slowFactor, 0.55);
+      enemy.slowFor = Math.max(enemy.slowFor, 2.8 * intensity + 0.8);
+      enemy.slowFactor = Math.min(enemy.slowFactor, 0.3);
     }
 
     if (effects.includes('knockback')) {
-      enemy.mesh.position.z = Math.max(START_Z + 2, enemy.mesh.position.z - (0.6 + intensity * 1.2));
+      enemy.mesh.position.z = Math.max(START_Z + 2, enemy.mesh.position.z - (1.5 + intensity * 3.0));
     }
 
     if (effects.includes('shield_break') && enemy.kind === 'tank') {
-      damageEnemy(enemy, 5 + intensity * 7);
+      damageEnemy(enemy, 12 + intensity * 18);
     }
   }
 
@@ -331,17 +349,17 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       return false;
     }
 
-    const power = clamp(Number(spell?.vfx?.intensity || 0.85), 0.2, 1.4);
+    const power = clamp(Number(spell?.vfx?.intensity || 1.2), 0.2, 3.0);
     const shape = ['orb', 'ring', 'wall', 'arc'].includes(spell?.vfx?.shape) ? spell.vfx.shape : 'orb';
-    const shapeSize = clamp(Number(spell?.vfx?.size ?? 1), 0.4, 2.2);
-    const baseRadius = (archetype === 'aoe_burst' ? 0.62 : 0.5) * shapeSize;
+    const shapeSize = clamp(Number(spell?.vfx?.size ?? 1.4), 0.4, 4.0);
+    const baseRadius = (archetype === 'aoe_burst' ? 0.9 : 0.7) * shapeSize;
     const elementColor = colorForElement(spell?.element);
     const projectileMesh = new THREE.Mesh(
       projectileGeometryForShape(shape, baseRadius),
       new THREE.MeshStandardMaterial({
         color: elementColor.base,
         emissive: elementColor.emissive,
-        emissiveIntensity: 0.55 + power * 0.45,
+        emissiveIntensity: 0.8 + power * 0.7,
       })
     );
     projectileMesh.position.copy(commander.mesh.position).add(new THREE.Vector3(0, 1.8, -0.5));
@@ -351,20 +369,30 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     projectileMesh.castShadow = true;
     scene.add(projectileMesh);
 
+    // aura glow around projectile
+    const auraGeo = new THREE.SphereGeometry(baseRadius * 2.2, 12, 12);
+    const auraMat = new THREE.MeshBasicMaterial({
+      color: elementColor.base,
+      transparent: true,
+      opacity: 0.18 + power * 0.12,
+    });
+    const aura = new THREE.Mesh(auraGeo, auraMat);
+    projectileMesh.add(aura);
+
     projectiles.push({
       kind: archetype,
       mesh: projectileMesh,
       target,
-      speed: clamp(Number(spell?.numbers?.speed || 30), 8, 44),
-      damage: clamp(Number(spell?.numbers?.damage || 24), 8, 150),
+      speed: clamp(Number(spell?.numbers?.speed || 36), 8, 80),
+      damage: clamp(Number(spell?.numbers?.damage || 40), 8, 500),
       splash: clamp(
         Number(
           spell?.targeting?.singleTarget
-            ? spell?.numbers?.radius || 1.0
-            : spell?.numbers?.radius || (archetype === 'aoe_burst' ? 3.4 : 2.0)
+            ? spell?.numbers?.radius || 1.6
+            : spell?.numbers?.radius || (archetype === 'aoe_burst' ? 5.0 : 3.2)
         ),
         0.8,
-        8
+        16
       ),
       effects: Array.isArray(spell?.effects) ? spell.effects : [],
       element: spell?.element || 'arcane',
@@ -375,10 +403,10 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
   }
 
   function castZoneFromConfig(spell) {
-    const duration = clamp(Number(spell?.numbers?.durationSec || 4), 1, 10);
-    const radius = clamp(Number(spell?.numbers?.radius || 2.2), 1, 8);
-    const damage = clamp(Number(spell?.numbers?.damage || 12), 1, 120);
-    const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.8), 0.2, 2);
+    const duration = clamp(Number(spell?.numbers?.durationSec || 5), 1, 20);
+    const radius = clamp(Number(spell?.numbers?.radius || 3.5), 1, 16);
+    const damage = clamp(Number(spell?.numbers?.damage || 20), 1, 400);
+    const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.5), 0.1, 2);
     const effects = Array.isArray(spell?.effects) ? spell.effects : [];
     const element = spell?.element || 'arcane';
     const color = colorForElement(element).base;
@@ -439,13 +467,13 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       const waveWidth = clamp(Math.max(width, laneCoverage * 8 - 1.4), 6, MAP_WIDTH - 2);
       const hitDepth = clamp(radius, 1, 5);
       const wave = new THREE.Mesh(
-        new THREE.BoxGeometry(waveWidth, 2.8, Math.max(1.2, hitDepth * 2)),
+        new THREE.BoxGeometry(waveWidth, 3.6, Math.max(1.6, hitDepth * 2.5)),
         new THREE.MeshStandardMaterial({
           color,
           emissive: color,
-          emissiveIntensity: 0.32,
+          emissiveIntensity: 0.75,
           transparent: true,
-          opacity: 0.68,
+          opacity: 0.82,
         })
       );
       wave.position.set(centerX, 1.45, z);
@@ -470,7 +498,7 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
         tickRate,
         effects,
         speed: travelSpeed,
-        pushPerSecond: clamp(7 + Number(spell?.vfx?.intensity || 0.9) * 8, 5, 20),
+        pushPerSecond: clamp(12 + Number(spell?.vfx?.intensity || 1.2) * 14, 8, 45),
         timer: 0,
         isLinkedWall: false,
       });
@@ -478,13 +506,13 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       const halfWidth = clamp(Math.max(width * 0.5, laneBounds.span * 3.1), 2.2, MAP_WIDTH * 0.45);
       const halfLength = clamp(Math.max(length * 0.5, radius), 1.4, 12);
       const ring = new THREE.Mesh(
-        new THREE.CylinderGeometry(1, 1, 0.45, 24, 1, true),
+        new THREE.CylinderGeometry(1, 1, 0.65, 24, 1, true),
         new THREE.MeshStandardMaterial({
           color,
           emissive: color,
-          emissiveIntensity: 0.24,
+          emissiveIntensity: 0.8,
           transparent: true,
-          opacity: 0.7,
+          opacity: 0.85,
         })
       );
       ring.scale.set(halfWidth, 1, halfLength);
@@ -524,16 +552,16 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       return false;
     }
 
-    const damage = clamp(Number(spell?.numbers?.damage || 34), 8, 120);
-    const chainCount = clamp(Math.floor(Number(spell?.numbers?.chainCount || 3)), 2, 7);
+    const damage = clamp(Number(spell?.numbers?.damage || 60), 8, 400);
+    const chainCount = clamp(Math.floor(Number(spell?.numbers?.chainCount || 5)), 2, 14);
     const effects = Array.isArray(spell?.effects) ? spell.effects : [];
     const sorted = [...liveEnemies].sort((a, b) => b.mesh.position.z - a.mesh.position.z).slice(0, chainCount);
     for (let i = 0; i < sorted.length; i += 1) {
       const enemy = sorted[i];
       spawnZap(enemy.mesh.position, spell?.element);
-      const falloff = 1 - i * 0.12;
+      const falloff = 1 - i * 0.06;
       damageEnemy(enemy, damage * falloff);
-      applyImpactEffects(enemy, effects, 0.85);
+      applyImpactEffects(enemy, effects, 1.2);
     }
 
     return true;
@@ -687,7 +715,7 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
     const archetype = String(spell.archetype || 'projectile');
     const cost = spell.cost || {};
-    const manaCost = clamp(Number(cost.mana || 12), 8, 65);
+    const manaCost = clamp(Number(cost.mana || 12), 4, 100);
 
     if (game.mana < manaCost) {
       onToast('Not enough mana');
@@ -722,9 +750,9 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
         archetype: 'aoe_burst',
         element: 'fire',
         targeting: { mode: 'nearest' },
-        numbers: { damage: 60, radius: 3.4, speed: 32, durationSec: 0 },
-        effects: ['burn'],
-        vfx: { intensity: 1, shape: 'orb' },
+        numbers: { damage: 120, radius: 5.5, speed: 48, durationSec: 0 },
+        effects: ['burn', 'knockback'],
+        vfx: { intensity: 1.8, shape: 'orb', size: 1.6 },
       },
       'aoe_burst'
     );
@@ -735,9 +763,9 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       archetype: 'zone_control',
       element: 'earth',
       targeting: { mode: 'lane' },
-      numbers: { damage: 10, radius: 2.0, durationSec: 8, tickRate: 0.8 },
+      numbers: { damage: 25, radius: 3.5, durationSec: 10, tickRate: 0.5 },
       effects: ['slow', 'knockback'],
-      vfx: { intensity: 0.75, shape: 'wall' },
+      vfx: { intensity: 1.2, shape: 'wall' },
     });
   }
 
@@ -746,9 +774,9 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       archetype: 'zone_control',
       element: 'ice',
       targeting: { mode: 'front_cluster' },
-      numbers: { damage: 14, radius: 4.2, durationSec: 2.2, tickRate: 0.7 },
+      numbers: { damage: 30, radius: 6.0, durationSec: 3.5, tickRate: 0.4 },
       effects: ['freeze', 'slow'],
-      vfx: { intensity: 0.9, shape: 'ring' },
+      vfx: { intensity: 1.5, shape: 'ring' },
     });
   }
 
@@ -757,9 +785,9 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       archetype: 'chain',
       element: 'storm',
       targeting: { mode: 'front_cluster', pattern: 'single_enemy', singleTarget: false },
-      numbers: { damage: 42, radius: 2.1, durationSec: 0, chainCount: 4, width: 4, length: 6, laneSpan: 1 },
+      numbers: { damage: 85, radius: 3.5, durationSec: 0, chainCount: 7, width: 6, length: 8, laneSpan: 2 },
       effects: ['stun'],
-      vfx: { intensity: 1.1, shape: 'arc' },
+      vfx: { intensity: 2.0, shape: 'arc' },
     });
   }
 
@@ -1207,22 +1235,84 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     }
 
     const elementColor = colorForElement(projectile.element || 'fire');
+    // main explosion sphere - BIG
     const fx = new THREE.Mesh(
-      new THREE.SphereGeometry(0.7, 8, 8),
+      new THREE.SphereGeometry(2.2, 12, 12),
       new THREE.MeshStandardMaterial({
         color: elementColor.base,
         emissive: elementColor.emissive,
-        emissiveIntensity: 1,
+        emissiveIntensity: 2.5,
       })
     );
     fx.position.copy(point);
     scene.add(fx);
-    projectiles.push({ kind: 'zap', mesh: fx, life: 0.24 });
+    projectiles.push({ kind: 'zap', mesh: fx, life: 0.35 });
+
+    // shockwave ring expanding outward
+    const shockwave = new THREE.Mesh(
+      new THREE.RingGeometry(0.5, 1.2, 32),
+      new THREE.MeshBasicMaterial({
+        color: elementColor.base,
+        transparent: true,
+        opacity: 0.5,
+        side: THREE.DoubleSide,
+      })
+    );
+    shockwave.rotation.x = -Math.PI / 2;
+    shockwave.position.set(point.x, 0.2, point.z);
+    shockwave.scale.set(1, 1, 1);
+    scene.add(shockwave);
+    projectiles.push({ kind: 'shockwave', mesh: shockwave, life: 0.4, maxScale: 6 + projectile.splash });
+
+    // secondary flash sphere
+    const flash = new THREE.Mesh(
+      new THREE.SphereGeometry(3.5, 8, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.35,
+      })
+    );
+    flash.position.copy(point);
+    scene.add(flash);
+    projectiles.push({ kind: 'zap', mesh: flash, life: 0.15 });
+
+    // ember sparks
+    for (let s = 0; s < 5; s++) {
+      const spark = new THREE.Mesh(
+        new THREE.SphereGeometry(0.2 + Math.random() * 0.3, 6, 6),
+        new THREE.MeshStandardMaterial({
+          color: elementColor.base,
+          emissive: elementColor.emissive,
+          emissiveIntensity: 2.0,
+        })
+      );
+      spark.position.set(
+        point.x + (Math.random() - 0.5) * 3,
+        point.y + Math.random() * 3,
+        point.z + (Math.random() - 0.5) * 3,
+      );
+      scene.add(spark);
+      projectiles.push({ kind: 'zap', mesh: spark, life: 0.2 + Math.random() * 0.2 });
+    }
   }
 
   function updateProjectiles(dt) {
     for (let i = projectiles.length - 1; i >= 0; i -= 1) {
       const projectile = projectiles[i];
+
+      if (projectile.kind === 'shockwave') {
+        projectile.life -= dt;
+        const t = 1 - projectile.life / 0.4;
+        const s = 1 + t * (projectile.maxScale || 6);
+        projectile.mesh.scale.set(s, s, s);
+        projectile.mesh.material.opacity = Math.max(0, 0.5 * (1 - t));
+        if (projectile.life <= 0) {
+          scene.remove(projectile.mesh);
+          projectiles.splice(i, 1);
+        }
+        continue;
+      }
 
       if (projectile.kind === 'zap') {
         projectile.life -= dt;
@@ -1324,7 +1414,7 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
           if (enemy.dead) continue;
           if (enemyInsideZone(enemy, zone)) {
             damageEnemy(enemy, zone.damage * zone.tickRate);
-            applyImpactEffects(enemy, zone.effects, zone.kind === 'wave' ? 0.95 : 0.7);
+            applyImpactEffects(enemy, zone.effects, zone.kind === 'wave' ? 1.4 : 1.1);
           }
         }
       }

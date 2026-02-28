@@ -10,7 +10,8 @@ import {
 } from './combat/reaction-physics.js';
 import { disposeEnemyVisual, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
 import { PromptProcessor } from './prompt/promptProcessor.js';
-
+import { PROMPT_TEMPLATE_VERSION } from './prompt/templateDrafts.js';
+import { playHurt, playDeath } from './sfx.js';
 
 const LANE_COUNT = 5;
 const LANE_SPACING = 8;
@@ -45,6 +46,10 @@ const GAME = {
   gameOver: false,
 };
 
+const BASELINE_HISTORY_TEXT =
+  `No applied prompts yet.\n` +
+  `Sandbox baseline: no generated ui/mechanics/units/actions.\n` +
+  `Template: ${PROMPT_TEMPLATE_VERSION}`;
 
 const SPELLS = {
   fireball: {
@@ -74,7 +79,6 @@ const enemies = [];
 const projectiles = [];
 const walls = [];
 const zones = [];
-const beams = [];
 const spellQueue = [];
 let spellQueueProcessing = false;
 
@@ -86,33 +90,39 @@ const dom = {
   gold: document.getElementById('gold'),
   reservedGold: document.getElementById('reservedGold'),
   unlocks: document.getElementById('unlocks'),
+  loopStatus: document.getElementById('loopStatus'),
+  queueStatus: document.getElementById('queueStatus'),
+  applyStatus: document.getElementById('applyStatus'),
   commandWrap: document.getElementById('commandWrap'),
   commandInput: document.getElementById('commandInput'),
-  preview: document.getElementById('preview'),
-  previewBody: document.getElementById('previewBody'),
+  historyScript: document.getElementById('historyScript'),
   spellHistoryList: document.getElementById('spellHistoryList'),
-  spellInput: document.getElementById('spellInput'),
+  promptInput: document.getElementById('promptInput'),
+  cancelSpellQueueBtn: document.getElementById('cancelSpellQueueBtn'),
+  resetSandboxBtn: document.getElementById('resetSandboxBtn'),
   toast: document.getElementById('toast'),
 };
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x0a1119, 55, 170);
+scene.fog = new THREE.Fog(0x1a0800, 60, 170);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.4;
 document.body.appendChild(renderer.domElement);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 320);
 camera.position.set(0, 46, 42);
 camera.lookAt(0, 0, -8);
 
-const ambient = new THREE.AmbientLight(0x87a8cc, 0.38);
+const ambient = new THREE.AmbientLight(0xcc8866, 0.7);
 scene.add(ambient);
 
-const mainLight = new THREE.DirectionalLight(0xcde5ff, 1.05);
+const mainLight = new THREE.DirectionalLight(0xffaa66, 1.6);
 mainLight.position.set(12, 38, 16);
 mainLight.castShadow = true;
 mainLight.shadow.mapSize.set(2048, 2048);
@@ -122,10 +132,16 @@ mainLight.shadow.camera.top = 70;
 mainLight.shadow.camera.bottom = -70;
 scene.add(mainLight);
 
-const fillLight = new THREE.DirectionalLight(0x5fa2d8, 0.55);
+const fillLight = new THREE.DirectionalLight(0xcc5522, 0.8);
 fillLight.position.set(-25, 16, -32);
 scene.add(fillLight);
 
+const lavaUnderglow = new THREE.DirectionalLight(0xff4400, 0.4);
+lavaUnderglow.position.set(0, -5, -30);
+scene.add(lavaUnderglow);
+
+const emberParticles = [];
+const animatedEnv = { torchLights: [], lavaPools: [], lavaRiverMats: [], smokeColumns: [], bannerMeshes: [] };
 buildMap();
 
 const commander = createCommander();
@@ -155,9 +171,16 @@ const promptProcessor = new PromptProcessor(
     refundReservedGold,
   },
   {
-    onQueueUpdated: () => {},
-    onStatus: () => {},
-    onHistoryUpdated: () => {},
+    onQueueUpdated: (queueSize) => {
+      dom.queueStatus.textContent = `Queue: ${queueSize}`;
+    },
+    onStatus: (message) => {
+      dom.applyStatus.textContent = message;
+    },
+    onHistoryUpdated: () => {
+      const script = promptProcessor.getReplayScript();
+      dom.historyScript.textContent = script.length > 0 ? script : BASELINE_HISTORY_TEXT;
+    },
   },
   {
     generationMode: import.meta.env.VITE_GENERATION_MODE ?? 'openai-api-key',
@@ -197,10 +220,45 @@ dom.commandInput.addEventListener('keydown', (event) => {
 });
 
 setupPromptUi();
-bootstrap();
+initOnboarding();
+
+function initOnboarding() {
+  const overlay = document.getElementById('onboarding');
+  const startBtn = document.getElementById('obStartBtn');
+  if (!overlay) {
+    bootstrap();
+    return;
+  }
+
+  // bg soundtrack - god of goons (needs user gesture to play)
+  const bgm = new Audio('/god-of-goons.mp3');
+  bgm.loop = true;
+  bgm.volume = 0.45;
+
+  let dismissed = false;
+  function dismiss() {
+    if (dismissed) return;
+    dismissed = true;
+    bgm.play().catch(() => {});
+    overlay.classList.add('ob-exiting');
+    setTimeout(() => overlay.remove(), 800);
+    bootstrap();
+  }
+
+  startBtn.addEventListener('click', dismiss);
+
+  window.addEventListener('keydown', function onFirstKey(e) {
+    if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+    window.removeEventListener('keydown', onFirstKey);
+    dismiss();
+  });
+}
 
 async function bootstrap() {
   refreshHud();
+  dom.loopStatus.textContent = 'Loop: Running';
+  dom.loopStatus.classList.remove('status-danger');
+  dom.loopStatus.classList.add('status-ok');
 
   try {
     await loadEnemyModels(scene);
@@ -211,73 +269,679 @@ async function bootstrap() {
   animate();
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// PROCEDURAL TEXTURE GENERATORS
+// ═══════════════════════════════════════════════════════════════
+
+function makeGroundTexture(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+
+  // Deep scorched earth base
+  ctx.fillStyle = '#3d2b1f';
+  ctx.fillRect(0, 0, size, size);
+
+  // Multi-octave noise for stone grain
+  for (let oct = 0; oct < 3; oct++) {
+    const count = [size * size * 0.5, size * size * 0.3, size * size * 0.15][oct];
+    const scale = [1, 2, 4][oct];
+    const alpha = [0.18, 0.12, 0.08][oct];
+    for (let i = 0; i < count; i++) {
+      const x = Math.random() * size;
+      const y = Math.random() * size;
+      const b = 25 + Math.random() * 40;
+      ctx.fillStyle = `rgba(${b + Math.random() * 15 | 0},${b * 0.7 + Math.random() * 10 | 0},${b * 0.5 + Math.random() * 6 | 0},${alpha + Math.random() * 0.1})`;
+      ctx.fillRect(x, y, scale + Math.random() * scale, scale + Math.random() * scale);
+    }
+  }
+
+  // Dark crevices
+  for (let i = 0; i < 60; i++) {
+    ctx.beginPath();
+    ctx.lineWidth = 0.3 + Math.random() * 2;
+    ctx.strokeStyle = `rgba(10,5,2,${0.5 + Math.random() * 0.3})`;
+    let cx = Math.random() * size, cy = Math.random() * size;
+    ctx.moveTo(cx, cy);
+    for (let s = 0; s < 3 + (Math.random() * 8 | 0); s++) {
+      cx += (Math.random() - 0.5) * 50;
+      cy += (Math.random() - 0.5) * 50;
+      ctx.lineTo(cx, cy);
+    }
+    ctx.stroke();
+  }
+
+  // Lava glow veins in cracks
+  for (let i = 0; i < 25; i++) {
+    ctx.beginPath();
+    ctx.lineWidth = 0.8 + Math.random() * 1.5;
+    ctx.strokeStyle = `rgba(200,60,10,${0.06 + Math.random() * 0.08})`;
+    ctx.shadowColor = 'rgba(255,80,10,0.3)';
+    ctx.shadowBlur = 4;
+    let cx = Math.random() * size, cy = Math.random() * size;
+    ctx.moveTo(cx, cy);
+    for (let s = 0; s < 2 + (Math.random() * 5 | 0); s++) {
+      cx += (Math.random() - 0.5) * 40;
+      cy += (Math.random() - 0.5) * 40;
+      ctx.lineTo(cx, cy);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  // Scattered rocks / pebbles
+  for (let i = 0; i < 300; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 0.8 + Math.random() * 3;
+    const b = 35 + Math.random() * 30;
+    ctx.fillStyle = `rgba(${b + 10 | 0},${b | 0},${b * 0.7 | 0},${0.25 + Math.random() * 0.35})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * (0.5 + Math.random() * 0.5), Math.random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 18);
+  return tex;
+}
+
+function makeGroundNormal(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgb(128,128,255)';
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < size * size * 0.5; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const dx = (Math.random() - 0.5) * 30 + 128;
+    const dy = (Math.random() - 0.5) * 30 + 128;
+    ctx.fillStyle = `rgb(${dx | 0},${dy | 0},${220 + Math.random() * 35 | 0})`;
+    ctx.fillRect(x, y, 1 + Math.random() * 2, 1 + Math.random() * 2);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 18);
+  return tex;
+}
+
+function makeSkyDome() {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 256;
+  const ctx = c.getContext('2d');
+
+  const grad = ctx.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, '#0a0200');
+  grad.addColorStop(0.2, '#1a0800');
+  grad.addColorStop(0.35, '#3d1508');
+  grad.addColorStop(0.5, '#5a1a06');
+  grad.addColorStop(0.65, '#3d1508');
+  grad.addColorStop(0.8, '#1a0800');
+  grad.addColorStop(1, '#0a0200');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 512, 256);
+
+  // Roiling volcanic clouds
+  for (let i = 0; i < 400; i++) {
+    const x = Math.random() * 512;
+    const y = 30 + Math.random() * 180;
+    const w = 20 + Math.random() * 80;
+    const h = 8 + Math.random() * 25;
+    const distFromCenter = Math.abs(y - 128) / 128;
+    const brightness = (1 - distFromCenter) * 0.15;
+    const rr = 140 + Math.random() * 80;
+    const gg = 40 + Math.random() * 40;
+    const bb = 5 + Math.random() * 15;
+    ctx.fillStyle = `rgba(${rr | 0},${gg | 0},${bb | 0},${brightness * (0.3 + Math.random() * 0.4)})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, w / 2, h / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Bright ember highlights in clouds
+  for (let i = 0; i < 60; i++) {
+    const x = Math.random() * 512;
+    const y = 60 + Math.random() * 120;
+    const r = 2 + Math.random() * 6;
+    const grad2 = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad2.addColorStop(0, 'rgba(255,140,30,0.3)');
+    grad2.addColorStop(1, 'rgba(255,60,0,0)');
+    ctx.fillStyle = grad2;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  return tex;
+}
+
+function makeLavaTexture(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, '#ffcc44');
+  grad.addColorStop(0.3, '#ff6600');
+  grad.addColorStop(0.7, '#cc2200');
+  grad.addColorStop(1, '#440800');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < size * size * 0.3; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const dist = Math.hypot(x - size / 2, y - size / 2) / (size / 2);
+    const b = (1 - dist) * 255;
+    ctx.fillStyle = `rgba(${Math.min(255, b + 50) | 0},${b * 0.4 | 0},0,${0.05 + Math.random() * 0.1})`;
+    ctx.fillRect(x, y, 1 + Math.random() * 3, 1 + Math.random() * 3);
+  }
+  for (let i = 0; i < 30; i++) {
+    ctx.beginPath();
+    ctx.strokeStyle = `rgba(30,10,0,${0.3 + Math.random() * 0.3})`;
+    ctx.lineWidth = 1 + Math.random() * 3;
+    let cx = Math.random() * size, cy = Math.random() * size;
+    ctx.moveTo(cx, cy);
+    for (let s = 0; s < 4; s++) { cx += (Math.random() - 0.5) * 40; cy += (Math.random() - 0.5) * 40; ctx.lineTo(cx, cy); }
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function makeStoneTexture(size, baseR, baseG, baseB) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = `rgb(${baseR},${baseG},${baseB})`;
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < size * size * 0.4; i++) {
+    const x = Math.random() * size, y = Math.random() * size;
+    const v = (Math.random() - 0.5) * 25;
+    ctx.fillStyle = `rgba(${baseR + v | 0},${baseG + v | 0},${baseB + v * 0.7 | 0},0.2)`;
+    ctx.fillRect(x, y, 1 + Math.random() * 2, 1 + Math.random() * 2);
+  }
+  for (let row = 0; row < size; row += 16 + Math.random() * 8) {
+    ctx.strokeStyle = `rgba(${baseR * 0.5 | 0},${baseG * 0.5 | 0},${baseB * 0.5 | 0},0.3)`;
+    ctx.lineWidth = 0.5 + Math.random();
+    ctx.beginPath(); ctx.moveTo(0, row); ctx.lineTo(size, row); ctx.stroke();
+    const offset = (row / 20 | 0) % 2 === 0 ? 0 : size * 0.3;
+    for (let col = offset; col < size; col += 24 + Math.random() * 16) {
+      ctx.beginPath(); ctx.moveTo(col, row); ctx.lineTo(col, row + 20); ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DYNAMIC ENVIRONMENT STATE
+// ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// BUILD MAP
+// ═══════════════════════════════════════════════════════════════
+
 function buildMap() {
+  // ── Sky dome ──
+  scene.background = makeSkyDome();
+
+  // ── Scorched volcanic ground ──
+  const groundTex = makeGroundTexture(512);
+  const groundNorm = makeGroundNormal(256);
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(MAP_WIDTH, 150, 2, 16),
-    new THREE.MeshStandardMaterial({ color: 0x213245, roughness: 0.95, metalness: 0.02 })
+    new THREE.PlaneGeometry(MAP_WIDTH, 150, 48, 96),
+    new THREE.MeshStandardMaterial({
+      map: groundTex, normalMap: groundNorm, normalScale: new THREE.Vector2(0.6, 0.6),
+      roughness: 0.92, metalness: 0.06,
+    })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.z = -8;
   ground.receiveShadow = true;
+  const pos = ground.geometry.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i);
+    const n = Math.sin(x * 0.7) * Math.cos(y * 0.5) * 0.3
+            + Math.sin(x * 2.1 + y * 1.3) * 0.15
+            + Math.sin(x * 4.7 - y * 3.2) * 0.08
+            + Math.sin(x * 8.3 + y * 6.1) * 0.03;
+    pos.setZ(i, pos.getZ(i) + n);
+  }
+  pos.needsUpdate = true;
+  ground.geometry.computeVertexNormals();
   scene.add(ground);
 
-  const laneMat = new THREE.MeshStandardMaterial({ color: 0x30475f, roughness: 0.93, metalness: 0.03 });
-  for (let i = 0; i < LANE_COUNT; i += 1) {
-    const lane = new THREE.Mesh(new THREE.PlaneGeometry(6, 145), laneMat);
-    lane.rotation.x = -Math.PI / 2;
-    lane.position.set(laneX(i), 0.02, -8);
-    scene.add(lane);
+  // ── Lava rivers (wide flowing channels along borders) ──
+  const lavaRiverTex = makeLavaTexture(256);
+  lavaRiverTex.repeat.set(1, 8);
+  const lavaRiverMat = new THREE.MeshStandardMaterial({
+    map: lavaRiverTex, emissive: 0xff4400, emissiveIntensity: 1.5,
+    roughness: 0.2, metalness: 0.1,
+  });
+  animatedEnv.lavaRiverMats.push(lavaRiverMat);
+  for (const side of [-1, 1]) {
+    const river = new THREE.Mesh(new THREE.PlaneGeometry(5, 140), lavaRiverMat);
+    river.rotation.x = -Math.PI / 2;
+    river.position.set(side * (MAP_WIDTH / 2 - 1), 0.02, -8);
+    scene.add(river);
+    for (let z = -70; z < 30; z += 20) {
+      const g = new THREE.PointLight(0xff4400, 1.2, 12);
+      g.position.set(side * (MAP_WIDTH / 2 - 1), 0.8, z);
+      scene.add(g);
+    }
   }
 
-  const base = new THREE.Mesh(
-    new THREE.BoxGeometry(26, 8, 10),
-    new THREE.MeshStandardMaterial({ color: 0x6686a9, roughness: 0.8 })
-  );
+  // ── Lava cracks across the battlefield ──
+  const lavaCrackMat = new THREE.MeshStandardMaterial({
+    color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 2.0,
+    roughness: 0.3, transparent: true, opacity: 0.7,
+  });
+  const cracks = [
+    { x: -18, z: -40, sx: 0.6, sz: 30, r: 0.15 }, { x: 10, z: -25, sx: 0.5, sz: 24, r: -0.1 },
+    { x: -6, z: -55, sx: 0.4, sz: 20, r: 0.3 },   { x: 20, z: -50, sx: 0.35, sz: 18, r: -0.2 },
+    { x: -14, z: 0, sx: 0.5, sz: 22, r: 0.05 },    { x: 5, z: -65, sx: 0.4, sz: 14, r: -0.35 },
+    { x: -2, z: -35, sx: 0.3, sz: 16, r: 0.4 },    { x: 14, z: -10, sx: 0.35, sz: 12, r: -0.25 },
+  ];
+  for (const c of cracks) {
+    const crack = new THREE.Mesh(new THREE.PlaneGeometry(c.sx, c.sz), lavaCrackMat);
+    crack.rotation.x = -Math.PI / 2;
+    crack.rotation.z = c.r;
+    crack.position.set(c.x, 0.04, c.z);
+    scene.add(crack);
+  }
+
+  // ── Lava pools with animated glow ──
+  const lavaPoolTex = makeLavaTexture(128);
+  const poolSpots = [
+    { x: -28, z: -30, r: 5 },  { x: 29, z: -50, r: 4.5 },
+    { x: -30, z: -60, r: 3.8 }, { x: 28, z: -10, r: 4.5 },
+    { x: -29, z: 5, r: 4 },     { x: 30, z: -75, r: 3.5 },
+  ];
+  for (const p of poolSpots) {
+    const poolMat = new THREE.MeshStandardMaterial({
+      map: lavaPoolTex, emissive: 0xff3300, emissiveIntensity: 2.0,
+      roughness: 0.15, transparent: true, opacity: 0.85,
+    });
+    const pool = new THREE.Mesh(new THREE.CircleGeometry(p.r, 24), poolMat);
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.set(p.x, 0.05, p.z);
+    scene.add(pool);
+    const glow = new THREE.PointLight(0xff4400, 2.5, 22);
+    glow.position.set(p.x, 2, p.z);
+    scene.add(glow);
+    animatedEnv.lavaPools.push({ light: glow, mat: poolMat, baseIntensity: 2.5, phase: Math.random() * 6.28 });
+
+    // Smoke column rising from each pool
+    for (let s = 0; s < 3; s++) {
+      const smoke = new THREE.Mesh(
+        new THREE.SphereGeometry(0.6 + Math.random() * 0.8, 6, 5),
+        new THREE.MeshStandardMaterial({ color: 0x222222, transparent: true, opacity: 0.2, depthWrite: false })
+      );
+      smoke.position.set(p.x + (Math.random() - 0.5) * 2, 1 + s * 2, p.z + (Math.random() - 0.5) * 2);
+      scene.add(smoke);
+      animatedEnv.smokeColumns.push({
+        mesh: smoke, baseX: smoke.position.x, baseZ: smoke.position.z,
+        baseY: smoke.position.y, speed: 0.8 + Math.random() * 0.6, phase: Math.random() * 6.28,
+      });
+    }
+  }
+
+  // ── Fortress base (dark obsidian keep) ──
+  const fortressTex = makeStoneTexture(256, 58, 53, 53);
+  fortressTex.repeat.set(3, 1);
+  const darkStoneMat = new THREE.MeshStandardMaterial({ map: fortressTex, roughness: 0.82, metalness: 0.18 });
+  const base = new THREE.Mesh(new THREE.BoxGeometry(26, 8, 10), darkStoneMat);
   base.position.set(0, 4.2, BASE_Z + 6);
   base.castShadow = true;
   base.receiveShadow = true;
   scene.add(base);
 
+  // Fortress spire towers
+  const towerMat = new THREE.MeshStandardMaterial({ color: 0x2e2a28, roughness: 0.85, metalness: 0.2 });
+  for (const tx of [-11, 11]) {
+    const tower = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.2, 14, 6), towerMat);
+    tower.position.set(tx, 7, BASE_Z + 6);
+    tower.castShadow = true;
+    scene.add(tower);
+    const spike = new THREE.Mesh(
+      new THREE.ConeGeometry(1.5, 4, 6),
+      new THREE.MeshStandardMaterial({ color: 0x1a1816, roughness: 0.7, metalness: 0.3 })
+    );
+    spike.position.set(tx, 16, BASE_Z + 6);
+    spike.castShadow = true;
+    scene.add(spike);
+    const brazier = new THREE.PointLight(0xff5500, 2, 16);
+    brazier.position.set(tx, 14.5, BASE_Z + 6);
+    scene.add(brazier);
+    animatedEnv.torchLights.push({ light: brazier, baseIntensity: 2, phase: Math.random() * 6.28 });
+  }
+
+  // ── The Eye — fiery core ──
   const core = new THREE.Mesh(
     new THREE.CylinderGeometry(2.2, 2.4, 5, 8),
-    new THREE.MeshStandardMaterial({ color: 0x7ac9ff, emissive: 0x215e8c, emissiveIntensity: 0.6 })
+    new THREE.MeshStandardMaterial({
+      color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 1.5, roughness: 0.25, metalness: 0.2,
+    })
   );
   core.position.set(0, 4.7, BASE_Z + 0.8);
   core.castShadow = true;
   scene.add(core);
+  const eyeGlow = new THREE.PointLight(0xff3300, 4, 40);
+  eyeGlow.position.set(0, 6, BASE_Z + 0.8);
+  scene.add(eyeGlow);
+  animatedEnv.torchLights.push({ light: eyeGlow, baseIntensity: 4, phase: 0 });
 
+  // ── Fortress wall (textured stone) ──
+  const wallTex = makeStoneTexture(256, 64, 54, 46);
+  wallTex.repeat.set(6, 1);
+  const wallMat = new THREE.MeshStandardMaterial({
+    map: wallTex, roughness: 0.85, metalness: 0.12,
+    transparent: true, opacity: 0.55,
+    emissive: 0x331100, emissiveIntensity: 0.2,
+  });
   const castleWall = new THREE.Mesh(
-    new THREE.BoxGeometry(MAP_WIDTH - 4.5, 5.4, CASTLE_WALL_DEPTH),
-    new THREE.MeshStandardMaterial({ color: 0x6a635c, roughness: 0.9, metalness: 0.04 })
+    new THREE.BoxGeometry(MAP_WIDTH - 4.5, 5.4, CASTLE_WALL_DEPTH), wallMat
   );
   castleWall.position.set(0, 2.7, CASTLE_WALL_Z);
-  castleWall.castShadow = true;
+  castleWall.castShadow = false;
   castleWall.receiveShadow = true;
+  castleWall.renderOrder = 1;
   scene.add(castleWall);
 
-  const battlementMat = new THREE.MeshStandardMaterial({ color: 0x7c736a, roughness: 0.88 });
-  const battlementCount = 9;
-  for (let i = 0; i < battlementCount; i += 1) {
-    const t = battlementCount === 1 ? 0.5 : i / (battlementCount - 1);
+  // ── Jagged battlements with skull ornaments ──
+  const battlementMat = new THREE.MeshStandardMaterial({
+    color: 0x4a3e38, roughness: 0.82, metalness: 0.12,
+    transparent: true, opacity: 0.55,
+  });
+  for (let i = 0; i < 11; i++) {
+    const t = i / 10;
     const x = -((MAP_WIDTH - 9) / 2) + t * (MAP_WIDTH - 9);
-    const battlement = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.45, 1.2), battlementMat);
-    battlement.position.set(x, 6.05, CASTLE_WALL_Z - CASTLE_WALL_DEPTH * 0.35);
-    battlement.castShadow = true;
-    battlement.receiveShadow = true;
-    scene.add(battlement);
+    const h = 1.6 + Math.sin(i * 2.3) * 0.5;
+    const batt = new THREE.Mesh(new THREE.BoxGeometry(2.2, h, 1.2), battlementMat);
+    batt.position.set(x, 5.4 + h / 2, CASTLE_WALL_Z - CASTLE_WALL_DEPTH * 0.35);
+    batt.castShadow = true;
+    batt.receiveShadow = true;
+    scene.add(batt);
+    if (i % 2 === 0) {
+      const ornament = new THREE.Mesh(
+        new THREE.SphereGeometry(0.35, 5, 4),
+        new THREE.MeshStandardMaterial({ color: 0x8a7e6c, roughness: 0.9 })
+      );
+      ornament.scale.set(1, 0.85, 0.9);
+      ornament.position.set(x, 5.4 + h + 0.4, CASTLE_WALL_Z - CASTLE_WALL_DEPTH * 0.5);
+      scene.add(ornament);
+    }
   }
 
-  const borderLeft = new THREE.Mesh(
-    new THREE.BoxGeometry(2, 3.2, 150),
-    new THREE.MeshStandardMaterial({ color: 0x1b2837 })
-  );
-  borderLeft.position.set(-MAP_WIDTH / 2, 1.6, -8);
+  // ── Wall-top torches (flickering) ──
+  const torchSpacing = (MAP_WIDTH - 10) / 7;
+  for (let i = 0; i < 8; i++) {
+    const tx = -(MAP_WIDTH - 10) / 2 + i * torchSpacing;
+    const torchLight = new THREE.PointLight(0xff6622, 2.2, 16);
+    torchLight.position.set(tx, 7.5, CASTLE_WALL_Z - 1.5);
+    scene.add(torchLight);
+    animatedEnv.torchLights.push({ light: torchLight, baseIntensity: 2.2, phase: Math.random() * 6.28 });
+    // Torch post
+    const tpost = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.1, 1.6, 4),
+      new THREE.MeshStandardMaterial({ color: 0x3a3028, roughness: 0.9, metalness: 0.3 })
+    );
+    tpost.position.set(tx, 6.2, CASTLE_WALL_Z - 1.5);
+    scene.add(tpost);
+    // Layered flame cones
+    for (let f = 0; f < 3; f++) {
+      const flame = new THREE.Mesh(
+        new THREE.ConeGeometry(0.2 + f * 0.08, 0.7 - f * 0.15, 5),
+        new THREE.MeshStandardMaterial({
+          color: f === 0 ? 0xffcc44 : f === 1 ? 0xff6622 : 0xff3300,
+          emissive: f === 0 ? 0xffaa22 : 0xff4400,
+          emissiveIntensity: 3 - f * 0.5,
+          transparent: true, opacity: 0.85 - f * 0.15,
+        })
+      );
+      flame.position.set(tx + (Math.random() - 0.5) * 0.1, 7.1 + f * 0.15, CASTLE_WALL_Z - 1.5);
+      scene.add(flame);
+    }
+  }
+
+  // ── War banners ──
+  const bannerColors = [0x8b1a1a, 0x6b0f0f, 0x991515, 0x7a1010];
+  for (let i = 0; i < 4; i++) {
+    const bx = -15 + i * 10;
+    const bannerGeo = new THREE.PlaneGeometry(1.8, 4, 1, 8);
+    const bp = bannerGeo.attributes.position;
+    for (let v = 0; v < bp.count; v++) { bp.setZ(v, Math.sin(bp.getY(v) * 1.5) * 0.15); }
+    bp.needsUpdate = true;
+    bannerGeo.computeVertexNormals();
+    const banner = new THREE.Mesh(bannerGeo, new THREE.MeshStandardMaterial({
+      color: bannerColors[i], roughness: 0.9, side: THREE.DoubleSide, emissive: 0x220000, emissiveIntensity: 0.2,
+    }));
+    banner.position.set(bx, 4.5, CASTLE_WALL_Z - CASTLE_WALL_DEPTH * 0.52);
+    scene.add(banner);
+    animatedEnv.bannerMeshes.push({ mesh: banner, geo: bannerGeo, phase: i * 1.5 });
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.06, 5.5, 4),
+      new THREE.MeshStandardMaterial({ color: 0x2a2220, metalness: 0.4, roughness: 0.7 })
+    );
+    pole.position.set(bx, 5.2, CASTLE_WALL_Z - CASTLE_WALL_DEPTH * 0.52);
+    scene.add(pole);
+  }
+
+  // ── Volcanic rock border walls ──
+  const borderMat = new THREE.MeshStandardMaterial({ color: 0x2e2420, roughness: 0.88, metalness: 0.05 });
+  const borderLeft = new THREE.Mesh(new THREE.BoxGeometry(2, 4, 150), borderMat);
+  borderLeft.position.set(-MAP_WIDTH / 2, 2, -8);
   borderLeft.receiveShadow = true;
   scene.add(borderLeft);
-
   const borderRight = borderLeft.clone();
   borderRight.position.x *= -1;
   scene.add(borderRight);
+
+  // ── Jagged rock spires ──
+  const rockMat = new THREE.MeshStandardMaterial({ color: 0x3a2e24, roughness: 0.9, metalness: 0.06 });
+  for (let side = -1; side <= 1; side += 2) {
+    for (let i = 0; i < 16; i++) {
+      const z = -75 + i * 9.5 + Math.sin(i * 3.7) * 3;
+      const h = 4 + Math.sin(i * 2.1) * 3.5;
+      const r = 0.8 + Math.sin(i * 1.7) * 0.5;
+      const spire = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5), rockMat);
+      spire.position.set(side * (MAP_WIDTH / 2 + 1.5 + Math.sin(i) * 0.8), h / 2, z);
+      spire.rotation.set(side * 0.08, 0, side * (0.1 + Math.sin(i * 1.3) * 0.1));
+      spire.castShadow = true;
+      scene.add(spire);
+    }
+  }
+
+  // ── Distant volcanic mountains ──
+  const mountainMat = new THREE.MeshStandardMaterial({ color: 0x2a201a, roughness: 0.95 });
+  const volcanoMat = new THREE.MeshStandardMaterial({ color: 0x241c16, roughness: 0.9 });
+  const mountains = [
+    { x: -45, z: -120, r: 22, h: 40 }, { x: 50, z: -130, r: 18, h: 35 },
+    { x: 0, z: -140, r: 30, h: 55, volcano: true },
+    { x: -70, z: -110, r: 15, h: 28 }, { x: 75, z: -115, r: 16, h: 30 },
+    { x: 30, z: -105, r: 14, h: 24 }, { x: -30, z: -100, r: 14, h: 26 },
+    { x: -55, z: -135, r: 20, h: 32 }, { x: 60, z: -125, r: 17, h: 30 },
+  ];
+  for (const m of mountains) {
+    const mtn = new THREE.Mesh(new THREE.ConeGeometry(m.r, m.h, 8), m.volcano ? volcanoMat : mountainMat);
+    mtn.position.set(m.x, m.h / 2 - 2, m.z);
+    scene.add(mtn);
+    if (m.volcano) {
+      const caldera = new THREE.PointLight(0xff2200, 5, 60);
+      caldera.position.set(m.x, m.h - 2, m.z);
+      scene.add(caldera);
+      animatedEnv.torchLights.push({ light: caldera, baseIntensity: 5, phase: 1.5 });
+      const lavaCap = new THREE.Mesh(
+        new THREE.CircleGeometry(6, 12),
+        new THREE.MeshStandardMaterial({ color: 0xff5500, emissive: 0xff3300, emissiveIntensity: 3.5, transparent: true, opacity: 0.85 })
+      );
+      lavaCap.rotation.x = -Math.PI / 2;
+      lavaCap.position.set(m.x, m.h - 2, m.z);
+      scene.add(lavaCap);
+      // Lava flow streaks down the volcano
+      for (let f = 0; f < 4; f++) {
+        const angle = (f / 4) * Math.PI * 2 + 0.3;
+        const flow = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.8, m.h * 0.6),
+          new THREE.MeshStandardMaterial({
+            color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 1.8,
+            transparent: true, opacity: 0.5, side: THREE.DoubleSide,
+          })
+        );
+        flow.position.set(m.x + Math.cos(angle) * m.r * 0.35, m.h * 0.35, m.z + Math.sin(angle) * m.r * 0.35);
+        flow.rotation.set(0.5, angle, 0);
+        scene.add(flow);
+      }
+    }
+  }
+
+  // ── Ruined pillars with rubble ──
+  const ruinMat = new THREE.MeshStandardMaterial({ color: 0x4a4540, roughness: 0.88, metalness: 0.08 });
+  const ruins = [
+    { x: -20, z: -30, h: 4.5, r: 0.8, tilt: 0.3 }, { x: 15, z: -50, h: 5.5, r: 0.7, tilt: -0.15 },
+    { x: -10, z: -65, h: 3.5, r: 0.9, tilt: 0.5 }, { x: 22, z: -20, h: 5, r: 0.7, tilt: -0.4 },
+    { x: -22, z: -55, h: 3.5, r: 0.8, tilt: 0.2 }, { x: 8, z: -40, h: 6.5, r: 0.6, tilt: -0.08 },
+    { x: -15, z: -15, h: 4, r: 0.75, tilt: 0.35 }, { x: 18, z: -70, h: 3, r: 0.85, tilt: -0.3 },
+  ];
+  for (const r of ruins) {
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(r.r * 0.65, r.r, r.h, 7), ruinMat);
+    pillar.position.set(r.x, r.h / 2, r.z);
+    pillar.rotation.z = r.tilt;
+    pillar.castShadow = true;
+    pillar.receiveShadow = true;
+    scene.add(pillar);
+    for (let rb = 0; rb < 3; rb++) {
+      const rubble = new THREE.Mesh(new THREE.DodecahedronGeometry(0.3 + Math.random() * 0.4, 0), ruinMat);
+      rubble.position.set(r.x + (Math.random() - 0.5) * 2, 0.2 + Math.random() * 0.2, r.z + (Math.random() - 0.5) * 2);
+      rubble.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+      scene.add(rubble);
+    }
+  }
+
+  // ── Skull piles, bones & weapons ──
+  const boneMat = new THREE.MeshStandardMaterial({ color: 0x8a7e6c, roughness: 0.92 });
+  const skullSpots = [
+    { x: -16, z: -20, n: 7 }, { x: 12, z: -35, n: 5 }, { x: -8, z: -70, n: 6 },
+    { x: 18, z: -60, n: 8 }, { x: -20, z: -45, n: 5 }, { x: 4, z: -15, n: 4 },
+    { x: -12, z: -55, n: 6 }, { x: 16, z: -42, n: 5 },
+  ];
+  for (const s of skullSpots) {
+    for (let j = 0; j < s.n; j++) {
+      const skull = new THREE.Mesh(new THREE.SphereGeometry(0.3 + Math.random() * 0.15, 5, 4), boneMat);
+      skull.position.set(s.x + (Math.random() - 0.5) * 2.5, 0.2 + Math.random() * 0.15, s.z + (Math.random() - 0.5) * 2.5);
+      skull.scale.y = 0.75 + Math.random() * 0.15;
+      scene.add(skull);
+    }
+    if (Math.random() > 0.4) {
+      const sword = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06, 1.8, 0.15),
+        new THREE.MeshStandardMaterial({ color: 0x606060, metalness: 0.6, roughness: 0.5 })
+      );
+      sword.position.set(s.x + (Math.random() - 0.5), 0.9, s.z + (Math.random() - 0.5));
+      sword.rotation.z = (Math.random() - 0.5) * 0.6;
+      sword.rotation.x = (Math.random() - 0.5) * 0.3;
+      scene.add(sword);
+    }
+  }
+
+  // ── Dark obelisks with glowing runes ──
+  const obeliskMat = new THREE.MeshStandardMaterial({
+    color: 0x1e1a18, roughness: 0.75, metalness: 0.25, emissive: 0x220800, emissiveIntensity: 0.1,
+  });
+  for (const o of [{ x: -23, z: -35 }, { x: 23, z: -55 }, { x: -23, z: -65 }, { x: 23, z: -15 }]) {
+    const h = 6 + Math.random() * 3;
+    const ob = new THREE.Mesh(new THREE.BoxGeometry(1.2, h, 1.2), obeliskMat);
+    ob.position.set(o.x, h / 2, o.z);
+    ob.rotation.y = Math.random() * 0.3;
+    ob.castShadow = true;
+    scene.add(ob);
+    const rune = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.6, 0.6),
+      new THREE.MeshStandardMaterial({ color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 2.5, transparent: true, opacity: 0.8 })
+    );
+    rune.position.set(o.x, h - 0.5, o.z + 0.61);
+    scene.add(rune);
+  }
+
+  // ── Embers & ash (200 particles) ──
+  const emberMat = new THREE.MeshStandardMaterial({
+    color: 0xff6622, emissive: 0xff4400, emissiveIntensity: 2.5, transparent: true, opacity: 0.9,
+  });
+  const ashMat = new THREE.MeshStandardMaterial({
+    color: 0x555555, emissive: 0x222222, emissiveIntensity: 0.3, transparent: true, opacity: 0.45, depthWrite: false,
+  });
+  for (let i = 0; i < 200; i++) {
+    const isEmber = Math.random() > 0.35;
+    const mat = isEmber ? emberMat : ashMat;
+    const size = isEmber ? 0.06 + Math.random() * 0.12 : 0.12 + Math.random() * 0.2;
+    const ember = new THREE.Mesh(new THREE.SphereGeometry(size, 4, 3), mat);
+    ember.position.set(
+      (Math.random() - 0.5) * MAP_WIDTH * 1.5,
+      Math.random() * 25,
+      -85 + Math.random() * 125
+    );
+    scene.add(ember);
+    emberParticles.push({
+      mesh: ember, baseY: ember.position.y, baseX: ember.position.x,
+      speed: 0.3 + Math.random() * 1.5, drift: (Math.random() - 0.5) * 0.8,
+      sway: 0.5 + Math.random() * 1.5, phase: Math.random() * Math.PI * 2, isEmber,
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ENVIRONMENT ANIMATION
+// ═══════════════════════════════════════════════════════════════
+
+function updateEnvironment(elapsed, dt) {
+  // Flickering torches & braziers
+  for (const t of animatedEnv.torchLights) {
+    const flicker = Math.sin(elapsed * 12 + t.phase) * 0.15
+                  + Math.sin(elapsed * 7.3 + t.phase * 2) * 0.1
+                  + Math.sin(elapsed * 19 + t.phase * 0.5) * 0.05;
+    t.light.intensity = t.baseIntensity * (1 + flicker);
+  }
+  // Pulsing lava pools
+  for (const p of animatedEnv.lavaPools) {
+    const pulse = Math.sin(elapsed * 1.5 + p.phase) * 0.3 + Math.sin(elapsed * 3.2 + p.phase) * 0.15;
+    p.light.intensity = p.baseIntensity * (1 + pulse);
+    p.mat.emissiveIntensity = 2.0 + pulse * 0.8;
+  }
+  // Flowing lava rivers
+  for (const m of animatedEnv.lavaRiverMats) {
+    m.map.offset.y = elapsed * 0.15;
+  }
+  // Smoke columns rising
+  for (const s of animatedEnv.smokeColumns) {
+    s.mesh.position.y = s.baseY + (elapsed * s.speed) % 8;
+    s.mesh.position.x = s.baseX + Math.sin(elapsed * 0.6 + s.phase) * 0.8;
+    s.mesh.position.z = s.baseZ + Math.cos(elapsed * 0.4 + s.phase) * 0.6;
+    const life = (s.mesh.position.y - s.baseY) / 8;
+    s.mesh.material.opacity = 0.22 * (1 - life);
+    s.mesh.scale.setScalar(1 + life * 2.5);
+  }
+  // Waving banners
+  for (const b of animatedEnv.bannerMeshes) {
+    const bp = b.geo.attributes.position;
+    for (let v = 0; v < bp.count; v++) {
+      const vy = bp.getY(v);
+      bp.setZ(v, Math.sin(vy * 1.5 + elapsed * 2.5 + b.phase) * 0.2 + Math.sin(vy * 3 + elapsed * 4 + b.phase) * 0.06);
+    }
+    bp.needsUpdate = true;
+    b.geo.computeVertexNormals();
+  }
+  // Embers & ash
+  for (const e of emberParticles) {
+    e.mesh.position.y = (e.baseY + elapsed * e.speed) % 26;
+    e.mesh.position.x = e.baseX + Math.sin(elapsed * e.sway + e.phase) * 1.5 * e.drift;
+    if (e.isEmber) {
+      e.mesh.material.opacity = 0.4 + Math.sin(elapsed * 4 + e.phase) * 0.5;
+    }
+  }
 }
 
 function createCommander() {
@@ -285,7 +949,7 @@ function createCommander() {
 
   const body = new THREE.Mesh(
     new THREE.CylinderGeometry(1.2, 1.4, 2.2, 8),
-    new THREE.MeshStandardMaterial({ color: 0x9ec2d8, roughness: 0.7 })
+    new THREE.MeshStandardMaterial({ color: 0x3a3538, roughness: 0.6, metalness: 0.4 })
   );
   body.position.y = 1.2;
   body.castShadow = true;
@@ -293,10 +957,16 @@ function createCommander() {
 
   const visor = new THREE.Mesh(
     new THREE.BoxGeometry(1.4, 0.5, 0.5),
-    new THREE.MeshStandardMaterial({ color: 0x86d6ff, emissive: 0x1a5d87, emissiveIntensity: 0.5 })
+    new THREE.MeshStandardMaterial({
+      color: 0xff5500, emissive: 0xff3300, emissiveIntensity: 1.2,
+    })
   );
   visor.position.set(0, 1.45, 0.9);
   group.add(visor);
+
+  const commanderGlow = new THREE.PointLight(0xff4400, 1.0, 8);
+  commanderGlow.position.set(0, 2, 0);
+  group.add(commanderGlow);
 
   group.position.set(0, 0, BASE_Z - 5);
 
@@ -498,23 +1168,43 @@ function closeCommand() {
 }
 
 function setupPromptUi() {
-  function submitSpell() {
-    const raw = dom.spellInput.value.trim();
-    if (!raw || GAME.gameOver) {
+  function submitPrompt() {
+    const raw = dom.promptInput.value.trim();
+    if (!raw) {
       return;
     }
-    dom.spellInput.value = '';
+    dom.promptInput.value = '';
+    dom.applyStatus.textContent = 'Sending prompt to spell API backend...';
     void castFromPrompt(raw);
   }
 
-  dom.spellInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
+  dom.cancelSpellQueueBtn.addEventListener('click', () => {
+    cancelQueuedSpells();
+  });
+
+  dom.resetSandboxBtn?.addEventListener('click', () => {
+    void resetSandboxToTemplate('manual');
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
-      submitSpell();
+      submitPrompt();
     }
   });
 
+  dom.promptInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      submitPrompt();
+    }
+  });
+
+  dom.queueStatus.textContent = `Queue: ${promptProcessor.getQueueSize()}`;
+  dom.applyStatus.textContent = 'No prompt applied yet';
+  dom.historyScript.textContent = BASELINE_HISTORY_TEXT;
   renderSpellHistory();
+  syncSpellQueueUi();
 }
 
 function canSpendGold(amount) {
@@ -566,6 +1256,11 @@ function getReservedGold() {
 async function castFromPrompt(rawPrompt) {
   const historyId = appendSpellHistory(rawPrompt);
   spellQueue.push({ rawPrompt, historyId });
+  const queuedAhead = spellQueue.length - 1;
+  if (queuedAhead > 0) {
+    dom.applyStatus.textContent = `Spell queued (${queuedAhead} ahead)`;
+  }
+  syncSpellQueueUi();
   void processSpellQueue();
 }
 
@@ -578,6 +1273,7 @@ async function processSpellQueue() {
   try {
     while (spellQueue.length > 0) {
       const next = spellQueue.shift();
+      syncSpellQueueUi();
       if (!next) {
         continue;
       }
@@ -585,6 +1281,7 @@ async function processSpellQueue() {
     }
   } finally {
     spellQueueProcessing = false;
+    syncSpellQueueUi();
   }
 }
 
@@ -651,6 +1348,8 @@ async function castQueuedSpell(rawPrompt, historyId) {
   } catch (error) {
     console.warn('[main] spell generation failed', error);
     const message = error instanceof Error ? error.message : String(error);
+    const endpoint = getSpellGenerateEndpoint();
+    dom.applyStatus.textContent = `Spell API request failed (${endpoint}): ${message}`;
     setToast('Spell engine unavailable');
     updateSpellHistory(historyId, 'failed', `Spell API failed: ${message}`);
   }
@@ -667,7 +1366,9 @@ function cancelQueuedSpells() {
     updateSpellHistory(queued.historyId, 'failed', 'Cancelled from queue');
   }
 
+  dom.applyStatus.textContent = `Cancelled ${pending.length} queued spell${pending.length === 1 ? '' : 's'}`;
   setToast('Queued spells cancelled');
+  syncSpellQueueUi();
 }
 
 async function resetSandboxToTemplate(reason) {
@@ -676,6 +1377,10 @@ async function resetSandboxToTemplate(reason) {
   }
 
   resetInFlight = true;
+  if (dom.resetSandboxBtn) {
+    dom.resetSandboxBtn.disabled = true;
+  }
+  dom.applyStatus.textContent = 'Resetting sandbox to template baseline...';
 
   try {
     promptProcessor.clearQueuedJobs();
@@ -686,8 +1391,24 @@ async function resetSandboxToTemplate(reason) {
     setToast(`Reset sandbox (${reason}), reloading baseline...`);
     window.location.reload();
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    dom.applyStatus.textContent = `Sandbox reset failed: ${message}`;
     resetInFlight = false;
+    if (dom.resetSandboxBtn) {
+      dom.resetSandboxBtn.disabled = false;
+    }
   }
+}
+
+function syncSpellQueueUi() {
+  if (!dom.cancelSpellQueueBtn) {
+    return;
+  }
+
+  const queuedCount = spellQueue.length;
+  dom.cancelSpellQueueBtn.disabled = queuedCount === 0;
+  dom.cancelSpellQueueBtn.textContent =
+    queuedCount > 0 ? `Cancel Queue (${queuedCount})` : 'Cancel Queue';
 }
 
 function getSpellGenerateEndpoint() {
@@ -720,10 +1441,6 @@ function castFromConfig(spell) {
     casted = castZoneFromConfig(spell);
   } else if (archetype === 'chain') {
     casted = castChainFromConfig(spell);
-  } else if (archetype === 'strike') {
-    casted = castStrikeFromConfig(spell);
-  } else if (archetype === 'beam') {
-    casted = castBeamFromConfig(spell);
   } else {
     casted = castProjectileFromConfig(spell, archetype);
   }
@@ -983,21 +1700,7 @@ function spawnTrailParticle(position, spell) {
   if (Math.random() > density * 0.4) return;
 
   const color = parseHexColor(vfx.secondaryColor) || parseHexColor(vfx.primaryColor) || 0xffffff;
-  const trailAlias = vfx.particleTheme || vfx.trailEffect || 'spark';
-  const trail = trailAlias === 'torch' || trailAlias === 'embers'
-    ? 'ember_trail'
-    : trailAlias === 'sparks'
-      ? 'spark'
-    : trailAlias === 'mist'
-      ? 'frost_mist'
-      : trailAlias === 'glyph'
-        ? 'lightning_arc'
-      : trailAlias === 'glyphs'
-        ? 'lightning_arc'
-        : trailAlias === 'stormthread'
-          ? 'lightning_arc'
-          : trailAlias;
-
+  const trail = vfx.trailEffect || 'spark';
   let geo;
   let size;
 
@@ -1300,18 +2003,6 @@ function projectileGeometryForShape(shape, baseRadius) {
   if (shape === 'arc') {
     return new THREE.ConeGeometry(baseRadius * 0.9, baseRadius * 2.1, 9);
   }
-  if (shape === 'cone') {
-    return new THREE.ConeGeometry(baseRadius * 0.85, baseRadius * 2.4, 14);
-  }
-  if (shape === 'helix') {
-    return new THREE.TorusKnotGeometry(baseRadius * 0.85, Math.max(0.05, baseRadius * 0.25), 64, 8);
-  }
-  if (shape === 'sphereburst') {
-    return new THREE.IcosahedronGeometry(baseRadius * 0.95, 1);
-  }
-  if (shape === 'crystal') {
-    return new THREE.DodecahedronGeometry(baseRadius * 0.8, 0);
-  }
   return new THREE.SphereGeometry(baseRadius, 12, 12);
 }
 
@@ -1323,24 +2014,14 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
   }
 
   const power = clamp(Number(spell?.vfx?.intensity || 0.85), 0.2, 1.4);
-  const shape = ['orb', 'ring', 'wall', 'arc', 'cone', 'helix', 'sphereburst', 'crystal'].includes(spell?.vfx?.shape)
-    ? spell.vfx.shape
-    : 'orb';
+  const shape = ['orb', 'ring', 'wall', 'arc'].includes(spell?.vfx?.shape) ? spell.vfx.shape : 'orb';
   const shapeSize = clamp(Number(spell?.vfx?.size ?? 1), 0.4, 2.2);
   const baseRadius = (archetype === 'aoe_burst' ? 0.62 : 0.5) * shapeSize;
-  const secondaryShape = ['orb', 'ring', 'wall', 'arc', 'cone', 'helix', 'sphereburst', 'crystal'].includes(spell?.vfx?.secondaryShape)
-    ? spell?.vfx?.secondaryShape
-    : null;
-  const secondaryScale = clamp(Number(spell?.vfx?.shapeScale ?? 1), 0.5, 2.6);
-  const secondaryBlend = clamp(Number(spell?.vfx?.shapeBlend ?? 0.45), 0, 1);
-  const secondaryRadius = baseRadius * secondaryScale;
   const elementColor = colorForElement(spell?.element);
   const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
   const secondaryHex = parseHexColor(spell?.vfx?.secondaryColor);
-  const colorPalette = spell?.vfx?.colors || {};
-  const mainColor = parseHexColor(colorPalette.core) || primaryHex || elementColor.base;
-  const glowColor = parseHexColor(colorPalette.glow) || secondaryHex || elementColor.emissive;
-  const edgeColor = parseHexColor(colorPalette.edge) || glowColor;
+  const mainColor = primaryHex ?? elementColor.base;
+  const glowColor = secondaryHex ?? elementColor.emissive;
 
   const projectileMesh = new THREE.Mesh(
     projectileGeometryForShape(shape, baseRadius),
@@ -1356,37 +2037,17 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
   }
   projectileMesh.castShadow = true;
   scene.add(projectileMesh);
+
   const glowLight = new THREE.PointLight(mainColor, power * 2.5, 6);
   glowLight.position.set(0, 0, 0);
   projectileMesh.add(glowLight);
-
-  let secondaryMesh = null;
-  if (secondaryShape && secondaryShape !== shape) {
-    secondaryMesh = new THREE.Mesh(
-      projectileGeometryForShape(secondaryShape, secondaryRadius),
-      new THREE.MeshStandardMaterial({
-        color: edgeColor,
-        emissive: edgeColor,
-        emissiveIntensity: 0.3 + power * 0.35,
-        transparent: true,
-        opacity: 0.35 + secondaryBlend * 0.45,
-      })
-    );
-    secondaryMesh.position.copy(projectileMesh.position);
-    secondaryMesh.rotation.x = Math.PI * (0.05 + secondaryBlend * 0.15);
-    secondaryMesh.scale.multiplyScalar(0.65 + secondaryBlend * 0.5);
-    scene.add(secondaryMesh);
-    glowLight.intensity = power * (2.6 + secondaryBlend * 0.6);
-  }
 
   projectiles.push({
     kind: archetype,
     mesh: projectileMesh,
     target,
-    speed: clamp(Number(spell?.numbers?.speed || 30), 22, 44),
-    damage: spell?.targeting?.singleTarget
-      ? clamp(Number(spell?.numbers?.damage || 120), 80, 250)
-      : clamp(Number(spell?.numbers?.damage || 70), 50, 200),
+    speed: clamp(Number(spell?.numbers?.speed || 30), 8, 44),
+    damage: clamp(Number(spell?.numbers?.damage || 24), 8, 150),
     splash: clamp(
       Number(
         spell?.targeting?.singleTarget
@@ -1399,8 +2060,6 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
     effects: Array.isArray(spell?.effects) ? spell.effects : [],
     element: spell?.element || 'arcane',
     intensity: power,
-    secondaryShape,
-    secondaryMesh,
     spellVfx: spell?.vfx || null,
     glowLight,
   });
@@ -1411,7 +2070,7 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
 function castZoneFromConfig(spell) {
   const duration = clamp(Number(spell?.numbers?.durationSec || 4), 1, 10);
   const radius = clamp(Number(spell?.numbers?.radius || 2.2), 1, 8);
-  const damage = clamp(Number(spell?.numbers?.damage || 40), 20, 150);
+  const damage = clamp(Number(spell?.numbers?.damage || 12), 1, 120);
   const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.8), 0.2, 2);
   const effects = Array.isArray(spell?.effects) ? spell.effects : [];
   const element = spell?.element || 'arcane';
@@ -1668,7 +2327,7 @@ function castChainFromConfig(spell) {
     return false;
   }
 
-  const damage = clamp(Number(spell?.numbers?.damage || 80), 50, 200);
+  const damage = clamp(Number(spell?.numbers?.damage || 34), 8, 120);
   const chainCount = clamp(Math.floor(Number(spell?.numbers?.chainCount || 3)), 2, 7);
   const effects = Array.isArray(spell?.effects) ? spell.effects : [];
   const sorted = [...liveEnemies].sort((a, b) => b.mesh.position.z - a.mesh.position.z).slice(0, chainCount);
@@ -1703,214 +2362,6 @@ function castChainFromConfig(spell) {
     for (let i = 0; i < sorted.length - 1; i++) {
       spawnChainArc(sorted[i].mesh.position, sorted[i + 1].mesh.position, primaryHex ?? colorForElement(spell?.element || 'storm').base);
     }
-  }
-
-  return true;
-}
-
-function castStrikeFromConfig(spell) {
-  const liveEnemies = enemies.filter((enemy) => !enemy.dead);
-  if (!liveEnemies.length) {
-    setToast('No target for strike');
-    return false;
-  }
-
-  const target = selectTarget(spell?.targeting);
-  if (!target) {
-    setToast('No target for strike');
-    return false;
-  }
-
-  const damage = clamp(Number(spell?.numbers?.damage || 100), 60, 250);
-  const radius = clamp(Number(spell?.numbers?.radius || 3.0), 1.5, 6);
-  const effects = Array.isArray(spell?.effects) ? spell.effects : [];
-  const element = spell?.element || 'fire';
-  const intensity = clamp(Number(spell?.vfx?.intensity || 1.0), 0.2, 1.4);
-  const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
-  const secondaryHex = parseHexColor(spell?.vfx?.secondaryColor);
-  const elementColor = colorForElement(element);
-  const mainColor = primaryHex ?? elementColor.base;
-  const glowColor = secondaryHex ?? elementColor.emissive;
-
-  const strikeX = target.mesh.position.x;
-  const strikeZ = target.mesh.position.z;
-  const skyY = 28;
-
-  const boltGeo = new THREE.CylinderGeometry(0.35, 0.6, skyY, 8);
-  const boltMat = new THREE.MeshStandardMaterial({
-    color: mainColor,
-    emissive: glowColor,
-    emissiveIntensity: 2.0,
-    transparent: true,
-    opacity: 0.92,
-  });
-  const bolt = new THREE.Mesh(boltGeo, boltMat);
-  bolt.position.set(strikeX, skyY / 2, strikeZ);
-  bolt.castShadow = true;
-  scene.add(bolt);
-
-  const boltGlow = new THREE.PointLight(mainColor, intensity * 5, 16);
-  boltGlow.position.set(strikeX, 4, strikeZ);
-  scene.add(boltGlow);
-
-  const groundRing = new THREE.Mesh(
-    new THREE.RingGeometry(0.3, radius, 24),
-    new THREE.MeshStandardMaterial({
-      color: mainColor,
-      emissive: mainColor,
-      emissiveIntensity: 1.5,
-      transparent: true,
-      opacity: 0.7,
-      side: THREE.DoubleSide,
-    })
-  );
-  groundRing.rotation.x = -Math.PI / 2;
-  groundRing.position.set(strikeX, 0.1, strikeZ);
-  scene.add(groundRing);
-
-  projectiles.push({
-    kind: 'strike_bolt',
-    mesh: bolt,
-    life: 0.35,
-    glowLight: boltGlow,
-    groundRing,
-  });
-
-  const impactPos = new THREE.Vector3(strikeX, 0.5, strikeZ);
-  for (const enemy of enemies) {
-    if (enemy.dead) continue;
-    const d = enemy.mesh.position.distanceTo(impactPos);
-    if (d <= radius) {
-      const falloff = 1 - d / radius;
-      const dealt = damage * (0.5 + falloff * 0.5);
-      damageEnemy(enemy, dealt);
-      applyImpactEffects(enemy, effects, element, intensity);
-      applyHitReaction(enemy, {
-        source: 'strike',
-        damage: dealt,
-        intensity,
-        effects,
-        impactPoint: { x: strikeX, z: strikeZ },
-      });
-    }
-  }
-
-  if (spell?.vfx) {
-    spawnImpactEffect(impactPos, { vfx: spell.vfx });
-  }
-
-  return true;
-}
-
-function castBeamFromConfig(spell) {
-  const liveEnemies = enemies.filter((enemy) => !enemy.dead);
-  if (!liveEnemies.length) {
-    setToast('No targets for beam');
-    return false;
-  }
-
-  if (beams.length >= 3) {
-    setToast('Too many active beams');
-    return false;
-  }
-
-  const damage = clamp(Number(spell?.numbers?.damage || 45), 25, 120);
-  const duration = clamp(Number(spell?.numbers?.durationSec || 2.5), 1, 6);
-  const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.3), 0.15, 0.8);
-  const beamLength = clamp(Number(spell?.numbers?.length || 35), 10, 80);
-  const beamWidth = clamp(Number(spell?.numbers?.width || 3), 1.5, 8);
-  const effects = Array.isArray(spell?.effects) ? spell.effects : [];
-  const element = spell?.element || 'fire';
-  const intensity = clamp(Number(spell?.vfx?.intensity || 1.0), 0.2, 1.4);
-  const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
-  const secondaryHex = parseHexColor(spell?.vfx?.secondaryColor);
-  const elementColor = colorForElement(element);
-  const mainColor = primaryHex ?? elementColor.base;
-  const glowColor = secondaryHex ?? elementColor.emissive;
-
-  const originX = commander.mesh.position.x;
-  const originZ = commander.mesh.position.z - 0.5;
-  const originY = 1.8;
-
-  const front = [...liveEnemies].sort((a, b) => b.mesh.position.z - a.mesh.position.z)[0];
-  const targetLane = front ? front.lane : Math.round(clamp((originX + (LANE_COUNT - 1) * LANE_SPACING / 2) / LANE_SPACING, 0, LANE_COUNT - 1));
-  const targetX = laneX(targetLane);
-  const aimDirX = targetX - originX;
-  const aimDirZ = -beamLength;
-  const aimLen = Math.sqrt(aimDirX * aimDirX + aimDirZ * aimDirZ);
-  const normX = aimDirX / aimLen;
-  const normZ = aimDirZ / aimLen;
-
-  const beamGroup = new THREE.Group();
-  beamGroup.position.set(originX, originY, originZ);
-
-  const coreMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(beamWidth * 0.15, beamWidth * 0.2, beamLength, 8),
-    new THREE.MeshStandardMaterial({
-      color: mainColor,
-      emissive: mainColor,
-      emissiveIntensity: 1.8,
-      transparent: true,
-      opacity: 0.85,
-    })
-  );
-  coreMesh.rotation.x = Math.PI / 2;
-  coreMesh.position.set((targetX - originX) * 0.5, 0, -beamLength / 2);
-  beamGroup.add(coreMesh);
-
-  const outerMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(beamWidth * 0.4, beamWidth * 0.5, beamLength, 10),
-    new THREE.MeshStandardMaterial({
-      color: glowColor,
-      emissive: glowColor,
-      emissiveIntensity: 0.6,
-      transparent: true,
-      opacity: 0.3,
-    })
-  );
-  outerMesh.rotation.x = Math.PI / 2;
-  outerMesh.position.set((targetX - originX) * 0.5, 0, -beamLength / 2);
-  beamGroup.add(outerMesh);
-
-  const beamGlow = new THREE.PointLight(mainColor, intensity * 3, 12);
-  beamGlow.position.set((targetX - originX) * 0.3, 0, -beamLength * 0.3);
-  beamGroup.add(beamGlow);
-
-  const endGlow = new THREE.PointLight(mainColor, intensity * 2, 8);
-  endGlow.position.set(targetX - originX, 0, -beamLength * 0.85);
-  beamGroup.add(endGlow);
-
-  const angle = Math.atan2(targetX - originX, -(originZ - beamLength));
-  beamGroup.rotation.y = angle * 0.15;
-
-  scene.add(beamGroup);
-
-  beams.push({
-    mesh: beamGroup,
-    coreMesh,
-    outerMesh,
-    originX,
-    originZ,
-    originY,
-    dirX: normX,
-    dirZ: normZ,
-    targetX,
-    beamLength,
-    beamWidth,
-    damage,
-    duration,
-    initialDuration: duration,
-    tickRate,
-    timer: 0,
-    effects,
-    element,
-    intensity,
-    spellVfx: spell?.vfx || null,
-  });
-
-  if (spell?.vfx) {
-    const startPos = new THREE.Vector3(originX, originY, originZ);
-    spawnImpactEffect(startPos, { vfx: { ...spell.vfx, screenShake: 0 } });
   }
 
   return true;
@@ -2272,6 +2723,7 @@ function destroyEnemy(index, slain) {
   enemy.hitTimer = 0;
   enemy.visual.playbackScale = 1;
   setEnemyAnim(enemy.visual, 'die');
+  playDeath();
 
   if (slain) {
     GAME.score += enemy.worth;
@@ -2304,40 +2756,7 @@ function updateProjectiles(dt) {
       continue;
     }
 
-    if (projectile.kind === 'strike_bolt') {
-      projectile.life -= dt;
-      const fade = clamp(projectile.life / 0.35, 0, 1);
-      projectile.mesh.material.opacity = fade * 0.92;
-      projectile.mesh.scale.x = 0.6 + fade * 0.4;
-      projectile.mesh.scale.z = 0.6 + fade * 0.4;
-      if (projectile.glowLight) {
-        projectile.glowLight.intensity = fade * 5;
-      }
-      if (projectile.groundRing) {
-        projectile.groundRing.material.opacity = fade * 0.7;
-        projectile.groundRing.scale.setScalar(1 + (1 - fade) * 2);
-      }
-      if (projectile.life <= 0) {
-        scene.remove(projectile.mesh);
-        if (projectile.glowLight) scene.remove(projectile.glowLight);
-        if (projectile.groundRing) {
-          scene.remove(projectile.groundRing);
-          projectile.groundRing.geometry.dispose();
-          projectile.groundRing.material.dispose();
-        }
-        projectile.mesh.geometry.dispose();
-        projectile.mesh.material.dispose();
-        projectiles.splice(i, 1);
-      }
-      continue;
-    }
-
     if (!projectile.target || projectile.target.dead || !enemies.includes(projectile.target)) {
-      if (projectile.secondaryMesh) {
-        scene.remove(projectile.secondaryMesh);
-        projectile.secondaryMesh.geometry.dispose();
-        projectile.secondaryMesh.material.dispose();
-      }
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
       continue;
@@ -2350,25 +2769,14 @@ function updateProjectiles(dt) {
 
     if (dir.lengthSq() <= step * step) {
       projectile.mesh.position.add(dir);
-      if (projectile.secondaryMesh) {
-        projectile.secondaryMesh.position.copy(projectile.mesh.position);
-      }
       explodeProjectile(projectile);
       if (projectile.glowLight) projectile.mesh.remove(projectile.glowLight);
-      if (projectile.secondaryMesh) {
-        scene.remove(projectile.secondaryMesh);
-        projectile.secondaryMesh.geometry.dispose();
-        projectile.secondaryMesh.material.dispose();
-      }
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
       continue;
     }
 
     projectile.mesh.position.add(dir.normalize().multiplyScalar(step));
-    if (projectile.secondaryMesh) {
-      projectile.secondaryMesh.position.copy(projectile.mesh.position);
-    }
     if (projectile.spellVfx && projectile.spellVfx.trailEffect !== 'none') {
       spawnTrailParticle(projectile.mesh.position, { vfx: projectile.spellVfx });
     }
@@ -2418,6 +2826,7 @@ function damageEnemy(enemy, amount) {
   if (enemy.hp > 0) {
     enemy.hitTimer = 0.12;
     setEnemyAnim(enemy.visual, 'hit');
+    playHurt();
   }
 }
 
@@ -2605,66 +3014,6 @@ function updateZones(dt) {
   }
 }
 
-function updateBeams(dt) {
-  for (let i = beams.length - 1; i >= 0; i -= 1) {
-    const beam = beams[i];
-    beam.duration -= dt;
-    beam.timer += dt;
-
-    const fade = clamp(beam.duration / (beam.initialDuration || 2.5), 0.1, 1);
-    const pulse = 1 + Math.sin(GAME.elapsed * 8 + i * 2.1) * 0.12;
-
-    if (beam.coreMesh) {
-      beam.coreMesh.material.opacity = clamp(0.5 + fade * 0.35, 0.3, 0.85) * pulse;
-      beam.coreMesh.material.emissiveIntensity = 1.2 + fade * 0.8;
-    }
-    if (beam.outerMesh) {
-      beam.outerMesh.material.opacity = clamp(0.1 + fade * 0.25, 0.05, 0.35);
-      beam.outerMesh.scale.x = pulse;
-      beam.outerMesh.scale.z = pulse;
-    }
-
-    if (beam.spellVfx && Math.random() < 0.4) {
-      const t = Math.random();
-      const particlePos = new THREE.Vector3(
-        beam.originX + (beam.targetX - beam.originX) * t + (Math.random() - 0.5) * beam.beamWidth,
-        beam.originY + (Math.random() - 0.5) * 0.5,
-        beam.originZ - beam.beamLength * t
-      );
-      spawnZoneParticle(particlePos, beam.spellVfx, 'rise');
-    }
-
-    while (beam.timer >= beam.tickRate) {
-      beam.timer -= beam.tickRate;
-      for (const enemy of enemies) {
-        if (enemy.dead) continue;
-        const ez = enemy.mesh.position.z;
-        const ex = enemy.mesh.position.x;
-        const inZ = ez <= beam.originZ && ez >= beam.originZ - beam.beamLength;
-        const beamXAtZ = beam.originX + (beam.targetX - beam.originX) * ((beam.originZ - ez) / beam.beamLength);
-        const inX = Math.abs(ex - beamXAtZ) <= beam.beamWidth * 0.6;
-        if (inZ && inX) {
-          const tickDamage = beam.damage * beam.tickRate;
-          damageEnemy(enemy, tickDamage);
-          applyImpactEffects(enemy, beam.effects, beam.element, beam.intensity * 0.7);
-          applyHitReaction(enemy, {
-            source: 'beam',
-            damage: tickDamage,
-            intensity: beam.intensity * 0.5,
-            effects: beam.effects,
-            impactPoint: { x: beamXAtZ, z: ez },
-          });
-        }
-      }
-    }
-
-    if (beam.duration <= 0) {
-      scene.remove(beam.mesh);
-      beams.splice(i, 1);
-    }
-  }
-}
-
 function updateResources(dt) {
   GAME.mana = clamp(GAME.mana + GAME.manaRegen * dt, 0, GAME.maxMana);
 }
@@ -2697,9 +3046,415 @@ function updateToast(dt) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// DEATH SEQUENCE — THE FALL OF THE FORTRESS
+// ═══════════════════════════════════════════════════════════════
+
+const deathState = {
+  active: false,
+  elapsed: 0,
+  phase: 0,          // 0=impact 1=crumble 2=eruption 3=shockwave 4=fade 5=overlay
+  shrapnel: [],
+  explosions: [],
+  cameraStart: null,
+  groundChunks: [],
+  deathLights: [],
+  overlayShown: false,
+};
+
 function gameOver() {
   GAME.gameOver = true;
-  setToast(`Base destroyed. Final score ${GAME.score}. Press R to restart.`);
+  dom.loopStatus.textContent = 'Loop: Halted';
+  dom.loopStatus.classList.remove('status-ok');
+  dom.loopStatus.classList.add('status-danger');
+  dom.applyStatus.textContent = 'Prompt apply disabled (game over)';
+
+  // Begin cinematic death
+  deathState.active = true;
+  deathState.elapsed = 0;
+  deathState.phase = 0;
+  deathState.cameraStart = camera.position.clone();
+
+  // Hide HUD elements during death cinematic
+  for (const el of [dom.commandWrap, document.getElementById('hud'), document.getElementById('statusStrip'), document.getElementById('historyPanel'), document.getElementById('promptBar')]) {
+    if (el) el.style.transition = 'opacity 1.5s';
+    if (el) el.style.opacity = '0';
+  }
+
+  // ── Phase 0: Initial massive impact — fortress explodes ──
+  spawnFortressExplosion();
+}
+
+function spawnFortressExplosion() {
+  const center = new THREE.Vector3(0, 5, BASE_Z + 2);
+
+  // Massive flash
+  const flash = new THREE.PointLight(0xffaa00, 30, 100);
+  flash.position.copy(center);
+  scene.add(flash);
+  deathState.deathLights.push({ light: flash, decay: 8 });
+
+  // Shrapnel — fortress chunks flying outward
+  const shrapnelMat = new THREE.MeshStandardMaterial({ color: 0x3a3535, roughness: 0.8, metalness: 0.2 });
+  const fireMat = new THREE.MeshStandardMaterial({
+    color: 0xff6600, emissive: 0xff4400, emissiveIntensity: 2.5,
+    transparent: true, opacity: 0.9,
+  });
+
+  for (let i = 0; i < 60; i++) {
+    const size = 0.3 + Math.random() * 2;
+    const geo = Math.random() > 0.5
+      ? new THREE.BoxGeometry(size, size * 0.7, size * 0.8)
+      : new THREE.DodecahedronGeometry(size * 0.5, 0);
+    const mat = Math.random() > 0.3 ? shrapnelMat : fireMat;
+    const chunk = new THREE.Mesh(geo, mat);
+    chunk.position.copy(center).add(new THREE.Vector3(
+      (Math.random() - 0.5) * 8,
+      Math.random() * 4,
+      (Math.random() - 0.5) * 6
+    ));
+    chunk.castShadow = true;
+    scene.add(chunk);
+
+    const angle = Math.random() * Math.PI * 2;
+    const upForce = 8 + Math.random() * 20;
+    const outForce = 5 + Math.random() * 18;
+    deathState.shrapnel.push({
+      mesh: chunk,
+      vx: Math.cos(angle) * outForce,
+      vy: upForce,
+      vz: Math.sin(angle) * outForce - 5,
+      rotSpeed: new THREE.Vector3(
+        (Math.random() - 0.5) * 10,
+        (Math.random() - 0.5) * 10,
+        (Math.random() - 0.5) * 10
+      ),
+      gravity: 22,
+      life: 4 + Math.random() * 3,
+    });
+  }
+
+  // Fire burst particles
+  const burstMat = new THREE.MeshStandardMaterial({
+    color: 0xffcc33, emissive: 0xff6600, emissiveIntensity: 4,
+    transparent: true, opacity: 1,
+  });
+  for (let i = 0; i < 40; i++) {
+    const p = new THREE.Mesh(new THREE.SphereGeometry(0.15 + Math.random() * 0.3, 5, 4), burstMat.clone());
+    p.position.copy(center).add(new THREE.Vector3(
+      (Math.random() - 0.5) * 4,
+      Math.random() * 3 + 2,
+      (Math.random() - 0.5) * 4
+    ));
+    scene.add(p);
+    const a = Math.random() * Math.PI * 2;
+    deathState.explosions.push({
+      mesh: p,
+      vx: Math.cos(a) * (3 + Math.random() * 12),
+      vy: 5 + Math.random() * 15,
+      vz: Math.sin(a) * (3 + Math.random() * 12),
+      life: 0.8 + Math.random() * 1.5,
+      maxLife: 0.8 + Math.random() * 1.5,
+    });
+  }
+}
+
+function spawnGroundCollapse() {
+  // Ground chunks breaking apart around the fortress
+  const chunkMat = new THREE.MeshStandardMaterial({ color: 0x3d2b1f, roughness: 0.9, metalness: 0.05 });
+  const lavaBurstMat = new THREE.MeshStandardMaterial({
+    color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 3,
+    transparent: true, opacity: 0.8,
+  });
+
+  for (let i = 0; i < 35; i++) {
+    const x = (Math.random() - 0.5) * MAP_WIDTH * 0.8;
+    const z = CASTLE_WALL_Z - 5 + (Math.random() - 0.5) * 30;
+    const size = 1 + Math.random() * 3;
+    const chunk = new THREE.Mesh(
+      new THREE.BoxGeometry(size, size * 0.4, size),
+      Math.random() > 0.7 ? lavaBurstMat.clone() : chunkMat
+    );
+    chunk.position.set(x, 0, z);
+    chunk.rotation.set(Math.random() * 0.3, Math.random() * 3, Math.random() * 0.3);
+    scene.add(chunk);
+
+    deathState.groundChunks.push({
+      mesh: chunk,
+      vy: 3 + Math.random() * 10,
+      vx: (Math.random() - 0.5) * 6,
+      vz: (Math.random() - 0.5) * 6,
+      rotSpeed: (Math.random() - 0.5) * 5,
+      fallDelay: Math.random() * 1.5,
+      fallen: false,
+    });
+  }
+
+  // Secondary explosion lights
+  for (let i = 0; i < 6; i++) {
+    const light = new THREE.PointLight(0xff4400, 8, 30);
+    light.position.set(
+      (Math.random() - 0.5) * 30,
+      2 + Math.random() * 5,
+      CASTLE_WALL_Z + (Math.random() - 0.5) * 20
+    );
+    scene.add(light);
+    deathState.deathLights.push({ light, decay: 3 + Math.random() * 2 });
+  }
+}
+
+function spawnVolcanicEruption() {
+  // Giant eruption from the central volcano
+  const center = new THREE.Vector3(0, 40, -140);
+  const eruptMat = new THREE.MeshStandardMaterial({
+    color: 0xff6600, emissive: 0xff3300, emissiveIntensity: 4,
+    transparent: true, opacity: 0.9,
+  });
+
+  for (let i = 0; i < 50; i++) {
+    const p = new THREE.Mesh(
+      new THREE.SphereGeometry(0.4 + Math.random() * 1.2, 5, 4),
+      eruptMat.clone()
+    );
+    p.position.copy(center).add(new THREE.Vector3(
+      (Math.random() - 0.5) * 8,
+      Math.random() * 5,
+      (Math.random() - 0.5) * 8
+    ));
+    scene.add(p);
+    const a = Math.random() * Math.PI * 2;
+    deathState.explosions.push({
+      mesh: p,
+      vx: Math.cos(a) * (2 + Math.random() * 8),
+      vy: 15 + Math.random() * 30,
+      vz: Math.sin(a) * (2 + Math.random() * 8) + 10,
+      life: 2 + Math.random() * 3,
+      maxLife: 2 + Math.random() * 3,
+    });
+  }
+
+  // Volcano flash
+  const vFlash = new THREE.PointLight(0xff2200, 40, 200);
+  vFlash.position.set(0, 50, -140);
+  scene.add(vFlash);
+  deathState.deathLights.push({ light: vFlash, decay: 4 });
+}
+
+function showDeathOverlay() {
+  if (deathState.overlayShown) return;
+  deathState.overlayShown = true;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'deathOverlay';
+  overlay.innerHTML = `
+    <div class="death-vignette"></div>
+    <div class="death-embers" aria-hidden="true"></div>
+    <div class="death-content">
+      <div class="death-rune">&#x2620;</div>
+      <h1 class="death-title">THE FORTRESS<br/><span class="death-title-accent">HAS FALLEN</span></h1>
+      <div class="death-stats">
+        <div class="death-stat"><span class="death-stat-value">${GAME.score}</span><span class="death-stat-label">SCORE</span></div>
+        <div class="death-stat-divider"></div>
+        <div class="death-stat"><span class="death-stat-value">${GAME.wave}</span><span class="death-stat-label">WAVES</span></div>
+        <div class="death-stat-divider"></div>
+        <div class="death-stat"><span class="death-stat-value">${GAME.kills}</span><span class="death-stat-label">KILLS</span></div>
+      </div>
+      <button id="deathRestartBtn" class="death-restart" type="button">
+        <span class="death-restart-text">RISE AGAIN</span>
+        <span class="death-restart-glow"></span>
+      </button>
+      <div class="death-hint">or press <kbd>R</kbd></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  requestAnimationFrame(() => overlay.classList.add('death-visible'));
+
+  document.getElementById('deathRestartBtn').addEventListener('click', () => {
+    window.location.reload();
+  });
+}
+
+function updateDeathSequence(dt) {
+  if (!deathState.active) return;
+  deathState.elapsed += dt;
+  const t = deathState.elapsed;
+
+  // Phase triggers
+  if (t > 0.5 && deathState.phase < 1) {
+    deathState.phase = 1;
+    spawnGroundCollapse();
+  }
+  if (t > 2.0 && deathState.phase < 2) {
+    deathState.phase = 2;
+    spawnVolcanicEruption();
+  }
+  if (t > 4.0 && deathState.phase < 3) {
+    deathState.phase = 3;
+    // Massive shockwave ring
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(1, 3, 32),
+      new THREE.MeshStandardMaterial({
+        color: 0xff6600, emissive: 0xff4400, emissiveIntensity: 3,
+        transparent: true, opacity: 0.8, side: THREE.DoubleSide,
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(0, 1, BASE_Z);
+    scene.add(ring);
+    deathState.shockwaveRing = ring;
+  }
+  if (t > 5.5 && deathState.phase < 4) {
+    deathState.phase = 4;
+  }
+  if (t > 7.0 && deathState.phase < 5) {
+    deathState.phase = 5;
+    showDeathOverlay();
+  }
+
+  // ── Cinematic camera ──
+  const cs = deathState.cameraStart;
+  if (t < 1.5) {
+    // Dramatic zoom toward fortress + heavy shake
+    const z = t / 1.5;
+    camera.position.set(
+      cs.x + (Math.random() - 0.5) * (2 - z) * 2,
+      cs.y - z * 12 + (Math.random() - 0.5) * (2 - z) * 1.5,
+      cs.z - z * 15
+    );
+    camera.lookAt(0, 4, BASE_Z);
+  } else if (t < 3.5) {
+    // Slow pull back + pan up to see eruption
+    const z = (t - 1.5) / 2;
+    camera.position.set(
+      Math.sin(t * 0.3) * 8,
+      cs.y - 12 + z * 20 + (Math.random() - 0.5) * 0.3,
+      cs.z - 15 + z * 5
+    );
+    camera.lookAt(0, 10 + z * 15, -40);
+  } else if (t < 6.0) {
+    // Orbit the destruction slowly
+    const z = (t - 3.5) / 2.5;
+    const angle = z * Math.PI * 0.4;
+    camera.position.set(
+      Math.sin(angle) * 50,
+      30 + z * 10,
+      20 + Math.cos(angle) * 40
+    );
+    camera.lookAt(0, 5, -10);
+    // Subtle shake
+    camera.position.x += (Math.random() - 0.5) * 0.2;
+    camera.position.y += (Math.random() - 0.5) * 0.15;
+  } else {
+    // Final slow drift upward
+    const z = Math.min((t - 6) / 3, 1);
+    camera.position.set(
+      Math.sin(t * 0.15) * 20,
+      35 + z * 20,
+      30 + z * 10
+    );
+    camera.lookAt(0, 5, -20);
+  }
+
+  // ── Update shrapnel ──
+  for (const s of deathState.shrapnel) {
+    if (s.life <= 0) continue;
+    s.life -= dt;
+    s.vy -= s.gravity * dt;
+    s.mesh.position.x += s.vx * dt;
+    s.mesh.position.y += s.vy * dt;
+    s.mesh.position.z += s.vz * dt;
+    s.mesh.rotation.x += s.rotSpeed.x * dt;
+    s.mesh.rotation.y += s.rotSpeed.y * dt;
+    s.mesh.rotation.z += s.rotSpeed.z * dt;
+    // Bounce off ground
+    if (s.mesh.position.y < 0.2) {
+      s.mesh.position.y = 0.2;
+      s.vy = Math.abs(s.vy) * 0.3;
+      s.vx *= 0.7;
+      s.vz *= 0.7;
+    }
+    if (s.life < 1) {
+      s.mesh.material.opacity = Math.max(0, s.life);
+      s.mesh.material.transparent = true;
+    }
+  }
+
+  // ── Update fire particles ──
+  for (const e of deathState.explosions) {
+    if (e.life <= 0) continue;
+    e.life -= dt;
+    e.vy -= 15 * dt;
+    e.mesh.position.x += e.vx * dt;
+    e.mesh.position.y += e.vy * dt;
+    e.mesh.position.z += e.vz * dt;
+    const lifeRatio = e.life / e.maxLife;
+    e.mesh.material.opacity = lifeRatio;
+    e.mesh.scale.setScalar(0.5 + (1 - lifeRatio) * 1.5);
+    if (e.mesh.position.y < 0.1) {
+      e.mesh.position.y = 0.1;
+      e.vy = Math.abs(e.vy) * 0.2;
+    }
+  }
+
+  // ── Update ground chunks ──
+  for (const c of deathState.groundChunks) {
+    c.fallDelay -= dt;
+    if (c.fallDelay > 0) continue;
+    if (!c.fallen) {
+      c.fallen = true;
+      c.mesh.position.y = 0;
+    }
+    c.vy -= 18 * dt;
+    c.mesh.position.x += c.vx * dt;
+    c.mesh.position.y += c.vy * dt;
+    c.mesh.position.z += c.vz * dt;
+    c.mesh.rotation.x += c.rotSpeed * dt;
+    if (c.mesh.position.y < -15) {
+      c.mesh.visible = false;
+    }
+  }
+
+  // ── Update death lights (decay) ──
+  for (const d of deathState.deathLights) {
+    d.light.intensity *= (1 - d.decay * dt * 0.3);
+    if (d.light.intensity < 0.01) d.light.intensity = 0;
+  }
+
+  // ── Shockwave ring expansion ──
+  if (deathState.shockwaveRing) {
+    const ring = deathState.shockwaveRing;
+    const age = t - 4;
+    const scale = 1 + age * 35;
+    ring.scale.set(scale, scale, 1);
+    ring.material.opacity = Math.max(0, 0.8 - age * 0.4);
+    ring.position.y = 1 + age * 2;
+  }
+
+  // ── Fog closes in during death ──
+  const fogProgress = Math.min(t / 8, 1);
+  scene.fog.near = 60 - fogProgress * 40;
+  scene.fog.far = 170 - fogProgress * 100;
+  scene.fog.color.setHex(lerpColor(0x1a0800, 0x0a0000, fogProgress));
+
+  // ── Tone mapping darkens ──
+  renderer.toneMappingExposure = 1.4 - fogProgress * 0.8;
+
+  // ── Ambient light fades to deep red ──
+  ambient.intensity = 0.7 - fogProgress * 0.4;
+  ambient.color.setHex(lerpColor(0xcc8866, 0x440000, fogProgress));
+
+  // Keep environment animating during death
+  updateEnvironment(GAME.elapsed + t, dt);
+}
+
+function lerpColor(a, b, t) {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  const rr = ar + (br - ar) * t;
+  const gg = ag + (bg - ag) * t;
+  const bb2 = ab + (bb - ab) * t;
+  return ((rr & 0xff) << 16) | ((gg & 0xff) << 8) | (bb2 & 0xff);
 }
 
 function animate() {
@@ -2714,18 +3469,20 @@ function animate() {
     updateResources(dt);
     updateWalls(dt);
     updateZones(dt);
-    updateBeams(dt);
     updateEnemies(dt);
     updateProjectiles(dt);
     updateTrailParticles(dt);
     updateImpactFlashes(dt);
     updateScreenShake(dt);
     updateZoneParticles(dt);
+    updateEnvironment(GAME.elapsed, dt);
     updateHud();
 
     if (GAME.baseHp <= 0) {
       gameOver();
     }
+  } else {
+    updateDeathSequence(dt);
   }
 
   updateToast(dt);
