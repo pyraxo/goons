@@ -1,0 +1,23 @@
+[
+  {
+    "kind": "melee",
+    "path": "/models/enemies/goblin.glb",
+    "scale": 1.1,
+    "yOffset": 0,
+    "castsShadow": true
+  },
+  {
+    "kind": "ranged",
+    "path": "/models/enemies/archer_goblin.glb",
+    "scale": 1.05,
+    "yOffset": 0,
+    "castsShadow": false
+  },
+  {
+    "kind": "tank",
+    "path": "/models/enemies/ogre.glb",
+    "scale": 1.35,
+    "yOffset": 0,
+    "castsShadow": true
+  }
+]
