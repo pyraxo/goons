@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { inspect } from 'node:util';
 import { getSpellApiMetrics, handleSpellGenerate } from './spell-api.js';
 
 loadEnvFile();
@@ -10,6 +11,13 @@ const HOST = process.env.SPELL_BACKEND_HOST || '127.0.0.1';
 
 const server = createServer(async (req, res) => {
   const start = Date.now();
+  applyCorsHeaders(res);
+
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
 
   if (req.method === 'GET' && req.url === '/healthz') {
     json(res, 200, {
@@ -27,13 +35,22 @@ const server = createServer(async (req, res) => {
     try {
       const rawBody = await readBody(req);
       const parsed = rawBody ? JSON.parse(rawBody) : {};
+      logStructured('log', '[spell-backend] cast_request', {
+        requestId,
+        body: parsed,
+      });
       const result = await handleSpellGenerate(parsed, { requestId });
+      logStructured('log', '[spell-backend] cast_response', {
+        requestId,
+        status: result?.status ?? 500,
+        body: result?.payload ?? null,
+      });
       logRequest(result, parsed, Date.now() - start, requestId);
       json(res, result.status, result.payload);
       return;
     } catch (error) {
       const detail = String(error?.message || error);
-      console.error('[spell-api] request_failed', { requestId, detail });
+      logStructured('error', '[spell-api] request_failed', { requestId, detail });
       json(res, 500, {
         error: 'internal spell api error',
         detail,
@@ -47,7 +64,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`[spell-backend] listening on http://${HOST}:${PORT}`);
-  console.log('[spell-backend] env', {
+  logStructured('log', '[spell-backend] env', {
     hasApiKey: Boolean(process.env.OPENAI_API_KEY),
     model: process.env.OPENAI_MODEL || 'gpt-5',
     timeoutMs: Number(process.env.SPELL_API_TIMEOUT_MS || 10000),
@@ -57,8 +74,14 @@ server.listen(PORT, HOST, () => {
 function json(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  applyCorsHeaders(res);
   res.end(JSON.stringify(payload));
+}
+
+function applyCorsHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
 function readBody(req) {
@@ -96,10 +119,22 @@ function logRequest(result, parsed, elapsedMs, requestId) {
   };
 
   if (source === 'fallback') {
-    console.warn('[spell-api] fallback', { requestId, ...line });
+    logStructured('warn', '[spell-api] fallback', { requestId, ...line });
   } else {
-    console.log('[spell-api] llm_cast', { requestId, ...line });
+    logStructured('log', '[spell-api] llm_cast', { requestId, ...line });
   }
+}
+
+function logStructured(level, label, payload) {
+  const msg = inspect(payload, {
+    depth: null,
+    maxArrayLength: null,
+    maxStringLength: null,
+    compact: false,
+    breakLength: 120,
+    sorted: true,
+  });
+  console[level](`${label} ${msg}`);
 }
 
 function loadEnvFile() {

@@ -18,6 +18,12 @@ const COMMANDER_MIN_Z = CASTLE_WALL_FRONT_Z + CASTLE_WALL_DEPTH + 0.35;
 const COMMANDER_MAX_Z = BASE_Z + 4;
 const GOON_ATTACK_INTERVAL_SECONDS = 3;
 const GOON_ATTACK_DAMAGE = 1;
+const SPELL_API_TARGET_KEY = 'spellApiTarget';
+const SPELL_API_TARGETS = {
+  vite: 'vite',
+  backend: 'backend',
+};
+const DIRECT_SPELL_BACKEND_ORIGIN = import.meta.env.VITE_SPELL_BACKEND_ORIGIN || 'http://127.0.0.1:8787';
 
 const GAME = {
   baseHp: 260,
@@ -91,6 +97,7 @@ const dom = {
   previewBody: document.getElementById('previewBody'),
   historyScript: document.getElementById('historyScript'),
   promptInput: document.getElementById('promptInput'),
+  spellApiTarget: document.getElementById('spellApiTarget'),
   modelPreset: document.getElementById('modelPreset'),
   estimateBtn: document.getElementById('estimateBtn'),
   applyBtn: document.getElementById('applyBtn'),
@@ -439,8 +446,38 @@ function closeCommand() {
 }
 
 function setupPromptUi() {
+  const savedSpellApiTarget = localStorage.getItem(SPELL_API_TARGET_KEY);
+  if (savedSpellApiTarget === SPELL_API_TARGETS.backend || savedSpellApiTarget === SPELL_API_TARGETS.vite) {
+    dom.spellApiTarget.value = savedSpellApiTarget;
+  }
+
+  dom.spellApiTarget.addEventListener('change', () => {
+    const selected = dom.spellApiTarget.value === SPELL_API_TARGETS.backend ? SPELL_API_TARGETS.backend : SPELL_API_TARGETS.vite;
+    localStorage.setItem(SPELL_API_TARGET_KEY, selected);
+    const targetText = selected === SPELL_API_TARGETS.backend ? 'Backend direct' : 'Vite proxy';
+    setToast(`Spell API target: ${targetText}`);
+  });
+
+  function submitPromptInputToSpellApi() {
+    const raw = dom.promptInput.value.trim();
+    if (!raw) {
+      return;
+    }
+    dom.promptInput.value = '';
+    lastEstimate = null;
+    dom.preview.hidden = true;
+    syncApplyButtonState();
+    dom.applyStatus.textContent = 'Sending prompt to spell API backend...';
+    void castFromPrompt(raw);
+  }
+
   dom.estimateBtn.addEventListener('click', async () => {
     if (estimateInFlight) {
+      return;
+    }
+
+    if (isSpellApiBackendSelected()) {
+      submitPromptInputToSpellApi();
       return;
     }
 
@@ -470,6 +507,11 @@ function setupPromptUi() {
   });
 
   dom.applyBtn.addEventListener('click', () => {
+    if (isSpellApiBackendSelected()) {
+      submitPromptInputToSpellApi();
+      return;
+    }
+
     if (!lastEstimate) {
       return;
     }
@@ -489,9 +531,63 @@ function setupPromptUi() {
     syncApplyButtonState();
   });
 
+  function forceApplyFromPromptInput() {
+    if (isSpellApiBackendSelected()) {
+      submitPromptInputToSpellApi();
+      return;
+    }
+
+    const raw = dom.promptInput.value.trim();
+    if (!raw) {
+      return;
+    }
+
+    if (GAME.gameOver) {
+      dom.applyStatus.textContent = 'Prompt apply disabled (game over)';
+      return;
+    }
+
+    const preset = dom.modelPreset.value;
+    const envelope = {
+      id: `prompt_force_${Date.now()}`,
+      inputMode: 'text',
+      rawPrompt: raw,
+      classifiedTypes: ['actions'],
+      estimatedGoldCost: 0,
+      riskLevel: 'medium',
+      requiresReview: false,
+    };
+
+    promptProcessor.enqueue(envelope, preset);
+    dom.applyStatus.textContent = `Force-queued ${envelope.id} with preset ${preset} (no estimate)`;
+    dom.promptInput.value = '';
+    lastEstimate = null;
+    dom.preview.hidden = true;
+    syncApplyButtonState();
+  }
+
   window.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-      dom.estimateBtn.click();
+      event.preventDefault();
+      if (isSpellApiBackendSelected()) {
+        submitPromptInputToSpellApi();
+        return;
+      }
+      if (event.shiftKey) {
+        dom.estimateBtn.click();
+        return;
+      }
+      forceApplyFromPromptInput();
+    }
+  });
+
+  dom.promptInput.addEventListener('keydown', (event) => {
+    if (!isSpellApiBackendSelected()) {
+      return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      submitPromptInputToSpellApi();
     }
   });
 
@@ -601,7 +697,7 @@ async function castFromPrompt(rawPrompt) {
 
   spellRequestInFlight = true;
   try {
-    const response = await fetch('/api/spells/generate', {
+    const response = await fetch(getSpellGenerateEndpoint(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -633,10 +729,24 @@ async function castFromPrompt(rawPrompt) {
     }
   } catch (error) {
     console.warn('[main] spell generation failed', error);
+    const message = error instanceof Error ? error.message : String(error);
+    const endpoint = getSpellGenerateEndpoint();
+    dom.applyStatus.textContent = `Spell API request failed (${endpoint}): ${message}`;
     setToast('Spell engine unavailable');
   } finally {
     spellRequestInFlight = false;
   }
+}
+
+function getSpellGenerateEndpoint() {
+  if (dom.spellApiTarget.value === SPELL_API_TARGETS.backend) {
+    return `${DIRECT_SPELL_BACKEND_ORIGIN}/api/spells/generate`;
+  }
+  return '/api/spells/generate';
+}
+
+function isSpellApiBackendSelected() {
+  return dom.spellApiTarget.value === SPELL_API_TARGETS.backend;
 }
 
 function castFromConfig(spell) {

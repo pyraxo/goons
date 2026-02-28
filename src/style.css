@@ -173,7 +173,7 @@ canvas {
   right: 0;
   bottom: 0;
   display: grid;
-  grid-template-columns: 1fr 170px auto auto;
+  grid-template-columns: 1fr 190px 170px auto auto;
   gap: 8px;
   align-items: center;
   z-index: 35;
@@ -197,6 +197,7 @@ canvas {
   font-size: 14px;
 }
 
+#spellApiTarget,
 #modelPreset,
 #estimateBtn,
 #applyBtn {

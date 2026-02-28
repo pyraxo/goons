@@ -1,4 +1,5 @@
 import { deterministicFallback, getToolDefinition, validateAndFinalizeSpell } from './spell-engine.js';
+import { inspect } from 'node:util';
 
 const metrics = {
   total: 0,
@@ -332,6 +333,7 @@ async function fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, op
   log('provider_tool_call_found', {
     name: toolCall.name,
     argsChars: argsRaw.length,
+    argsPreview: truncate(argsRaw, 800),
   });
   if (DEBUG_FULL_PAYLOAD) {
     log('provider_tool_call_args_full', {
@@ -348,6 +350,10 @@ async function fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, op
     });
     throw new Error('schema_args_not_json');
   }
+  log('spell_tool_call', {
+    tool: toolCall.name,
+    draft,
+  });
 
   return draft;
 }
@@ -434,7 +440,16 @@ function clamp(value, min, max) {
 
 function createLogger(requestId) {
   return (event, fields = {}) => {
-    console.log('[spell-api]', event, { requestId, ...fields });
+    const payload = { requestId, ...fields };
+    const msg = inspect(payload, {
+      depth: null,
+      maxArrayLength: null,
+      maxStringLength: null,
+      compact: false,
+      breakLength: 120,
+      sorted: true,
+    });
+    console.log(`[spell-api] ${event} ${msg}`);
   };
 }
 
