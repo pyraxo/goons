@@ -241,7 +241,7 @@ canvas {
   right: 0;
   bottom: 0;
   display: grid;
-  grid-template-columns: 1fr 190px 170px auto auto;
+  grid-template-columns: 1fr 190px 170px auto auto auto;
   gap: 8px;
   align-items: center;
   z-index: 35;
@@ -268,7 +268,8 @@ canvas {
 #spellApiTarget,
 #modelPreset,
 #estimateBtn,
-#applyBtn {
+#applyBtn,
+#cancelSpellQueueBtn {
   min-height: 42px;
   border-radius: 10px;
   border: 1px solid #355f8d;
@@ -279,7 +280,8 @@ canvas {
 }
 
 #estimateBtn,
-#applyBtn {
+#applyBtn,
+#cancelSpellQueueBtn {
   border: none;
   cursor: pointer;
   font-weight: 700;
@@ -295,7 +297,13 @@ canvas {
   color: #1a1d22;
 }
 
-#applyBtn:disabled {
+#cancelSpellQueueBtn {
+  background: #a33f5f;
+  color: #fff;
+}
+
+#applyBtn:disabled,
+#cancelSpellQueueBtn:disabled {
   background: #4f5460;
   color: #9aa0ad;
   cursor: not-allowed;
@@ -336,7 +344,8 @@ canvas {
   }
 
   #estimateBtn,
-  #applyBtn {
+  #applyBtn,
+  #cancelSpellQueueBtn {
     width: 100%;
   }
 }

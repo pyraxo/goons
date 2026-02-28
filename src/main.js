@@ -115,6 +115,7 @@ const dom = {
   modelPreset: document.getElementById('modelPreset'),
   estimateBtn: document.getElementById('estimateBtn'),
   applyBtn: document.getElementById('applyBtn'),
+  cancelSpellQueueBtn: document.getElementById('cancelSpellQueueBtn'),
   toast: document.getElementById('toast'),
 };
 
@@ -618,6 +619,10 @@ function setupPromptUi() {
     syncApplyButtonState();
   });
 
+  dom.cancelSpellQueueBtn.addEventListener('click', () => {
+    cancelQueuedSpells();
+  });
+
   function forceApplyFromPromptInput() {
     if (isSpellApiBackendSelected()) {
       submitPromptInputToSpellApi();
@@ -682,6 +687,7 @@ function setupPromptUi() {
   dom.applyStatus.textContent = 'No prompt applied yet';
   dom.historyScript.textContent = BASELINE_HISTORY_TEXT;
   renderSpellHistory();
+  syncSpellQueueUi();
 }
 
 function renderEstimate(estimate) {
@@ -763,6 +769,7 @@ async function castFromPrompt(rawPrompt) {
   if (queuedAhead > 0) {
     dom.applyStatus.textContent = `Spell queued (${queuedAhead} ahead)`;
   }
+  syncSpellQueueUi();
   void processSpellQueue();
 }
 
@@ -775,6 +782,7 @@ async function processSpellQueue() {
   try {
     while (spellQueue.length > 0) {
       const next = spellQueue.shift();
+      syncSpellQueueUi();
       if (!next) {
         continue;
       }
@@ -782,6 +790,7 @@ async function processSpellQueue() {
     }
   } finally {
     spellQueueProcessing = false;
+    syncSpellQueueUi();
   }
 }
 
@@ -798,6 +807,8 @@ async function castQueuedSpell(rawPrompt, historyId) {
     }
     await sleep(25);
   }
+
+  markSpellHistoryCastStart(historyId);
 
   const payload = {
     prompt: rawPrompt,
@@ -859,6 +870,33 @@ async function castQueuedSpell(rawPrompt, historyId) {
     setToast('Spell engine unavailable');
     updateSpellHistory(historyId, 'failed', `Spell API failed: ${message}`);
   }
+}
+
+function cancelQueuedSpells() {
+  if (spellQueue.length === 0) {
+    return;
+  }
+
+  const pending = [...spellQueue];
+  spellQueue.length = 0;
+  for (const queued of pending) {
+    updateSpellHistory(queued.historyId, 'failed', 'Cancelled from queue');
+  }
+
+  dom.applyStatus.textContent = `Cancelled ${pending.length} queued spell${pending.length === 1 ? '' : 's'}`;
+  setToast('Queued spells cancelled');
+  syncSpellQueueUi();
+}
+
+function syncSpellQueueUi() {
+  if (!dom.cancelSpellQueueBtn) {
+    return;
+  }
+
+  const queuedCount = spellQueue.length;
+  dom.cancelSpellQueueBtn.disabled = queuedCount === 0;
+  dom.cancelSpellQueueBtn.textContent =
+    queuedCount > 0 ? `Cancel Queue (${queuedCount})` : 'Cancel Queue';
 }
 
 function getSpellGenerateEndpoint() {
@@ -930,12 +968,17 @@ function castFromConfig(spell) {
 }
 
 function appendSpellHistory(prompt) {
+  const now = Date.now();
   const entry = {
     id: `spell_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     prompt: String(prompt || '').trim() || '(empty prompt)',
     status: 'queued',
     detail: '',
-    updatedAt: Date.now(),
+    updatedAt: now,
+    queuedAt: now,
+    castStartedAt: null,
+    castFinishedAt: null,
+    castDurationMs: null,
   };
 
   spellHistory.unshift(entry);
@@ -947,15 +990,32 @@ function appendSpellHistory(prompt) {
   return entry.id;
 }
 
+function markSpellHistoryCastStart(id) {
+  const entry = spellHistory.find((item) => item.id === id);
+  if (!entry) {
+    return;
+  }
+
+  const now = Date.now();
+  entry.castStartedAt = now;
+  entry.updatedAt = now;
+  renderSpellHistory();
+}
+
 function updateSpellHistory(id, status, detail = '') {
   const entry = spellHistory.find((item) => item.id === id);
   if (!entry) {
     return;
   }
 
+  const now = Date.now();
   entry.status = status;
   entry.detail = String(detail || '').trim();
-  entry.updatedAt = Date.now();
+  entry.updatedAt = now;
+  if (entry.castStartedAt !== null) {
+    entry.castFinishedAt = now;
+    entry.castDurationMs = Math.max(0, now - entry.castStartedAt);
+  }
   renderSpellHistory();
 }
 
@@ -1000,6 +1060,13 @@ function renderSpellHistory() {
       item.append(detail);
     }
 
+    if (entry.castDurationMs !== null) {
+      const duration = document.createElement('div');
+      duration.className = 'spell-history-detail';
+      duration.textContent = `Duration: ${formatSpellDuration(entry.castDurationMs)}`;
+      item.append(duration);
+    }
+
     container.append(item);
   }
 }
@@ -1010,6 +1077,13 @@ function formatSpellHistoryTime(timestamp) {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+function formatSpellDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs < 1000) {
+    return `${Math.max(0, Math.round(durationMs))}ms`;
+  }
+  return `${(durationMs / 1000).toFixed(2)}s`;
 }
 
 function parseSpell(prompt) {
