@@ -1,4 +1,5 @@
 import { deterministicFallback, getToolDefinition, validateAndFinalizeSpell } from './spell-engine.js';
+import { getSpellTemplateCatalogVersion, matchSpellTemplate } from './spell-template-matcher.js';
 import { inspect } from 'node:util';
 
 const metrics = {
@@ -42,6 +43,7 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
 
   const ctx = context.value;
   const prompt = ctx.prompt;
+  const templateMatch = matchSpellTemplate(prompt);
   log('request_validated', {
     promptPreview: prompt.slice(0, 60),
     wave: ctx.wave,
@@ -49,6 +51,17 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
     unlocks: ctx.unlocks,
     nearbyEnemyCount: ctx.nearbyEnemies.length,
   });
+  if (templateMatch) {
+    log('template_match', {
+      key: templateMatch.key,
+      alias: templateMatch.alias,
+      catalogVersion: getSpellTemplateCatalogVersion(),
+    });
+  } else {
+    log('template_no_match', {
+      catalogVersion: getSpellTemplateCatalogVersion(),
+    });
+  }
 
   let source = 'fallback';
   let resolved;
@@ -61,7 +74,7 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
       throw new Error('OPENAI_API_KEY missing');
     }
 
-    const draft = await fetchSpellDraftFromOpenAI(apiKey, prompt, ctx, log);
+    const draft = await fetchSpellDraftFromOpenAI(apiKey, prompt, ctx, templateMatch, log);
     const finalized = validateAndFinalizeSpell(draft, ctx);
 
     if (!finalized.ok) {
@@ -124,6 +137,13 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
         powerScore: resolved.powerScore,
         warnings: resolved.warnings,
         fallbackReason,
+        templateMatch: templateMatch
+          ? {
+              key: templateMatch.key,
+              alias: templateMatch.alias,
+            }
+          : null,
+        expandedPromptPreview: templateMatch ? truncate(templateMatch.expansion, 180) : null,
         telemetry: summarizeMetrics(),
       },
     },
@@ -146,7 +166,7 @@ function summarizeMetrics() {
   };
 }
 
-async function fetchSpellDraftFromOpenAI(apiKey, prompt, context, log) {
+async function fetchSpellDraftFromOpenAI(apiKey, prompt, context, templateMatch, log) {
   const attempts = [PRIMARY_MAX_OUTPUT_TOKENS, RETRY_MAX_OUTPUT_TOKENS];
   let lastError = null;
 
@@ -157,7 +177,7 @@ async function fetchSpellDraftFromOpenAI(apiKey, prompt, context, log) {
     }
 
     try {
-      return await fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, {
+      return await fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, templateMatch, log, {
         attempt: index + 1,
         maxOutputTokens: Math.round(maxOutputTokens),
       });
@@ -182,7 +202,7 @@ async function fetchSpellDraftFromOpenAI(apiKey, prompt, context, log) {
   throw lastError || new Error('provider_no_attempts');
 }
 
-async function fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, options) {
+async function fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, templateMatch, log, options) {
   const { attempt, maxOutputTokens } = options;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
@@ -198,7 +218,7 @@ async function fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, op
     parallel_tool_calls: false,
     tools: [tool],
     instructions:
-      'You are a spell balancer. Return exactly one craft_spell tool call only. Prioritize valid output for a real-time action game. Use targeting.pattern/targeting.singleTarget and numbers.width/numbers.length to match prompt geometry (single hit, lane circle, lane sweep).',
+      'You are a spell balancer. Return exactly one craft_spell tool call only. Prioritize valid output for a real-time action game. Use targeting.pattern/targeting.singleTarget and numbers.width/numbers.length to match prompt geometry (single hit, lane circle, lane sweep). If templateContext.expandedIntent is provided, treat it as supplemental guidance while preserving the user prompt intent.',
     input: [
       {
         role: 'user',
@@ -211,6 +231,13 @@ async function fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, op
               mana: context.mana,
               unlocks: context.unlocks,
               nearbyEnemies: context.nearbyEnemies,
+              templateContext: templateMatch
+                ? {
+                    matchedKey: templateMatch.key,
+                    matchedAlias: templateMatch.alias,
+                    expandedIntent: templateMatch.expansion,
+                  }
+                : undefined,
             }),
           },
         ],
@@ -228,6 +255,8 @@ async function fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, op
     promptChars: prompt.length,
     nearbyEnemyCount: context.nearbyEnemies.length,
     toolStrict: tool.strict,
+    templateMatched: Boolean(templateMatch),
+    templateKey: templateMatch?.key || null,
   });
   if (DEBUG_FULL_PAYLOAD) {
     log('provider_request_payload_full', {

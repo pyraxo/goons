@@ -1,6 +1,6 @@
 const ARCHETYPES = ['projectile', 'aoe_burst', 'zone_control', 'chain'];
 const ELEMENTS = ['fire', 'ice', 'arcane', 'earth', 'storm'];
-const TARGET_MODES = ['nearest', 'lane', 'lane_cluster', 'ground_point', 'front_cluster'];
+const TARGET_MODES = ['nearest', 'nearest_enemy', 'lane', 'lane_cluster', 'ground_point', 'front_cluster'];
 const TARGET_PATTERNS = ['single_enemy', 'lane_circle', 'lane_sweep'];
 const EFFECTS = ['burn', 'freeze', 'stun', 'knockback', 'slow', 'shield_break'];
 const VFX_SHAPES = ['orb', 'ring', 'wall', 'arc', 'wave'];
@@ -63,6 +63,8 @@ const TOOL_SCHEMA = {
         intensity: { type: 'number', minimum: 0.2, maximum: 1.4 },
         shape: { type: 'string', enum: VFX_SHAPES },
         size: { type: 'number', minimum: 0.4, maximum: 2.2 },
+        ringColor: { type: 'string', minLength: 3, maxLength: 16 },
+        visibility: { type: 'number', minimum: 0.4, maximum: 2.2 },
       },
     },
     sfx: {
@@ -226,6 +228,8 @@ function sanitizeDraft(draft, context, warnings) {
   const intensity = clampNumber(draft?.vfx?.intensity ?? 0.8, 0.2, 1.4);
   const vfxShape = VFX_SHAPES.includes(draft?.vfx?.shape) ? draft.vfx.shape : shapeForArchetype(archetype);
   const vfxSize = clampNumber(draft?.vfx?.size ?? defaultSizeForArchetype(archetype), 0.4, 2.2);
+  const visibility = clampNumber(draft?.vfx?.visibility ?? 1.0, 0.4, 2.2);
+  const ringColor = sanitizeColorToken(draft?.vfx?.ringColor);
 
   const spell = {
     archetype,
@@ -238,6 +242,8 @@ function sanitizeDraft(draft, context, warnings) {
       intensity,
       shape: vfxShape,
       size: vfxSize,
+      visibility,
+      ...(ringColor ? { ringColor } : {}),
     },
     sfx: {
       cue: sanitizeText(draft?.sfx?.cue, `${element}-cast`, 32),
@@ -261,7 +267,7 @@ function applyCompatibilityRules(spell, warnings) {
       spell.archetype = 'zone_control';
     }
     spell.vfx.shape = 'wave';
-    if (!['lane', 'lane_cluster', 'front_cluster'].includes(spell.targeting.mode)) {
+    if (!['nearest', 'nearest_enemy', 'lane', 'lane_cluster', 'front_cluster'].includes(spell.targeting.mode)) {
       spell.targeting.mode = 'front_cluster';
     }
   } else if (spell.targeting.pattern === 'lane_circle') {
@@ -273,7 +279,7 @@ function applyCompatibilityRules(spell, warnings) {
     if (!['ring', 'wall'].includes(spell.vfx.shape)) {
       spell.vfx.shape = 'ring';
     }
-    if (!['lane', 'lane_cluster', 'front_cluster'].includes(spell.targeting.mode)) {
+    if (!['nearest', 'nearest_enemy', 'lane', 'lane_cluster', 'front_cluster'].includes(spell.targeting.mode)) {
       spell.targeting.mode = 'lane_cluster';
     }
   }
@@ -462,6 +468,20 @@ function sanitizeText(value, fallback, maxLength) {
   }
   const cleaned = value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/-+/g, '-').slice(0, maxLength);
   return cleaned || fallback;
+}
+
+function sanitizeColorToken(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const cleaned = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(cleaned)) {
+    return cleaned;
+  }
+  if (/^(0x)?[0-9a-f]{6}$/.test(cleaned)) {
+    return `#${cleaned.replace(/^0x/, '')}`;
+  }
+  return null;
 }
 
 function clampNumber(value, min, max) {

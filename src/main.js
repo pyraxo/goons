@@ -1,4 +1,13 @@
 import * as THREE from 'three';
+import {
+  ZONE_IMPULSE_COOLDOWN_SEC,
+  applyImpulseToVelocity,
+  canApplyZoneImpulse,
+  computeImpulseVector,
+  integrateVelocity,
+  profileForEnemyKind,
+  updatePoiseAndStagger,
+} from './combat/reaction-physics.js';
 import { disposeEnemyVisual, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
 import { estimatePrompt } from './prompt/costEstimator.js';
 import { MODEL_PRESET_MAP, PromptProcessor } from './prompt/promptProcessor.js';
@@ -6,7 +15,9 @@ import { PROMPT_TEMPLATE_VERSION } from './prompt/templateDrafts.js';
 
 const LANE_COUNT = 5;
 const LANE_SPACING = 8;
+const LANE_HALF_WIDTH = 2.9;
 const START_Z = -78;
+const ENEMY_MIN_Z = START_Z + 2;
 const BASE_Z = 33;
 const MAP_WIDTH = 52;
 const STARTING_GOLD = 1_000_000;
@@ -346,6 +357,11 @@ function createEnemy(kind, lane) {
     burnDps: 0,
     atCastleWall: false,
     wallAttackAccumulatorSeconds: 0,
+    velX: 0,
+    velZ: 0,
+    staggerFor: 0,
+    poiseDamage: 0,
+    lastZoneImpulseAt: Number.NEGATIVE_INFINITY,
     dead: false,
     deathTimer: 0,
     hitTimer: 0,
@@ -388,6 +404,67 @@ function enemyConfig(kind) {
 
 function laneX(index) {
   return (index - (LANE_COUNT - 1) / 2) * LANE_SPACING;
+}
+
+function enemyLaneBounds(enemy) {
+  const center = laneX(enemy.lane);
+  return {
+    minX: center - LANE_HALF_WIDTH,
+    maxX: center + LANE_HALF_WIDTH,
+  };
+}
+
+function applyHitReaction(enemy, reaction) {
+  if (!enemy || enemy.dead) {
+    return;
+  }
+
+  const profile = profileForEnemyKind(enemy.kind);
+  const laneBounds = enemyLaneBounds(enemy);
+  const impactPoint = reaction?.impactPoint || enemy.mesh.position;
+  const impulse = computeImpulseVector({
+    source: reaction?.source || 'projectile',
+    damage: Number(reaction?.damage) || 0,
+    intensity: Number(reaction?.intensity) || 0.8,
+    effects: Array.isArray(reaction?.effects) ? reaction.effects : [],
+    impactPoint: {
+      x: Number(impactPoint.x) || enemy.mesh.position.x,
+      z: Number(impactPoint.z) || enemy.mesh.position.z,
+    },
+    enemyPosition: {
+      x: enemy.mesh.position.x,
+      z: enemy.mesh.position.z,
+    },
+    laneMinX: laneBounds.minX,
+    laneMaxX: laneBounds.maxX,
+    maxImpulse: profile.maxImpulse,
+  });
+
+  if (impulse.magnitude <= 0) {
+    return;
+  }
+
+  const nextVelocity = applyImpulseToVelocity(
+    { velX: enemy.velX, velZ: enemy.velZ },
+    { x: impulse.x, z: impulse.z },
+    profile
+  );
+  enemy.velX = nextVelocity.velX;
+  enemy.velZ = nextVelocity.velZ;
+
+  const nextPoise = updatePoiseAndStagger(
+    { poiseDamage: enemy.poiseDamage, staggerFor: enemy.staggerFor },
+    impulse.magnitude,
+    profile,
+    0
+  );
+  enemy.poiseDamage = nextPoise.poiseDamage;
+  enemy.staggerFor = nextPoise.staggerFor;
+  if (nextPoise.didStagger) {
+    enemy.wallAttackAccumulatorSeconds = 0;
+    enemy.hitTimer = Math.max(enemy.hitTimer, 0.14);
+    setEnemyAnim(enemy.visual, 'hit');
+  }
 }
 
 function onResize() {
@@ -962,7 +1039,7 @@ function castZoneFromConfig(spell) {
   const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.8), 0.2, 2);
   const effects = Array.isArray(spell?.effects) ? spell.effects : [];
   const element = spell?.element || 'arcane';
-  const color = colorForElement(element).base;
+  const color = zoneColorForSpell(spell, colorForElement(element).base);
   const shape = String(spell?.vfx?.shape || 'ring');
   const targetingPattern = String(spell?.targeting?.pattern || '');
   const width = clamp(Number(spell?.numbers?.width || radius * 2), 1, MAP_WIDTH - 2);
@@ -1057,14 +1134,15 @@ function castZoneFromConfig(spell) {
   } else {
     const halfWidth = clamp(Math.max(width * 0.5, laneBounds.span * 3.1), 2.2, MAP_WIDTH * 0.45);
     const halfLength = clamp(Math.max(length * 0.5, radius), 1.4, 12);
+    const visibility = clamp(Number(spell?.vfx?.visibility ?? 1), 0.4, 2.2);
     const ring = new THREE.Mesh(
       new THREE.CylinderGeometry(1, 1, 0.45, 24, 1, true),
       new THREE.MeshStandardMaterial({
         color,
         emissive: color,
-        emissiveIntensity: 0.24,
+        emissiveIntensity: clamp(0.24 + visibility * 0.26, 0.24, 0.95),
         transparent: true,
-        opacity: 0.7,
+        opacity: clamp(0.58 + visibility * 0.18, 0.55, 0.95),
       })
     );
     ring.scale.set(halfWidth, 1, halfLength);
@@ -1113,8 +1191,19 @@ function castChainFromConfig(spell) {
     const enemy = sorted[i];
     spawnZap(enemy.mesh.position, spell?.element);
     const falloff = 1 - i * 0.12;
-    damageEnemy(enemy, damage * falloff);
+    const dealt = damage * falloff;
+    damageEnemy(enemy, dealt);
     applyImpactEffects(enemy, effects, spell?.element, 0.85);
+    applyHitReaction(enemy, {
+      source: 'chain',
+      damage: dealt,
+      intensity: 0.85,
+      effects,
+      impactPoint: {
+        x: enemy.mesh.position.x,
+        z: enemy.mesh.position.z + 1.35,
+      },
+    });
   }
 
   return true;
@@ -1144,6 +1233,10 @@ function laneCenterXFromBounds(bounds) {
 }
 
 function chooseLaneForZone(targeting) {
+  if (targeting?.mode === 'nearest' || targeting?.mode === 'nearest_enemy') {
+    const nearest = nearestEnemy();
+    if (nearest) return nearest.lane;
+  }
   if ((targeting?.mode === 'lane' || targeting?.mode === 'lane_cluster') && Number.isFinite(targeting.lane)) {
     return clamp(Math.round(targeting.lane), 0, LANE_COUNT - 1);
   }
@@ -1160,6 +1253,10 @@ function chooseLaneForZone(targeting) {
 }
 
 function zoneZForTargeting(targeting, preferredLane = null) {
+  if (targeting?.mode === 'nearest' || targeting?.mode === 'nearest_enemy') {
+    const nearest = nearestEnemy();
+    if (nearest) return nearest.mesh.position.z;
+  }
   if (targeting?.mode === 'lane_cluster') {
     const lane =
       Number.isFinite(targeting?.lane) && targeting?.lane >= 0
@@ -1307,6 +1404,16 @@ function updateEnemies(dt) {
       continue;
     }
 
+    const reactionProfile = profileForEnemyKind(enemy.kind);
+    const nextPoise = updatePoiseAndStagger(
+      { poiseDamage: enemy.poiseDamage, staggerFor: enemy.staggerFor },
+      0,
+      reactionProfile,
+      dt
+    );
+    enemy.poiseDamage = nextPoise.poiseDamage;
+    enemy.staggerFor = nextPoise.staggerFor;
+
     if (enemy.frozenFor > 0) {
       enemy.frozenFor = Math.max(0, enemy.frozenFor - dt);
     }
@@ -1329,13 +1436,38 @@ function updateEnemies(dt) {
 
     if (enemy.hitTimer > 0) {
       enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
-      if (enemy.hitTimer === 0) {
+      if (enemy.hitTimer === 0 && enemy.staggerFor === 0) {
         setEnemyAnim(enemy.visual, enemy.atCastleWall ? 'attack' : 'run');
       }
     }
 
-    const moveScale = enemy.stunnedFor > 0 ? 0 : enemy.frozenFor > 0 ? 0.15 : enemy.slowFactor;
+    const movementInterrupted = enemy.staggerFor > 0 || enemy.stunnedFor > 0;
+    const moveScale = movementInterrupted ? 0 : enemy.frozenFor > 0 ? 0.15 : enemy.slowFactor;
     enemy.visual.playbackScale = moveScale;
+
+    const laneBounds = enemyLaneBounds(enemy);
+    const integrated = integrateVelocity(
+      {
+        positionX: enemy.mesh.position.x,
+        positionZ: enemy.mesh.position.z,
+        velX: enemy.velX,
+        velZ: enemy.velZ,
+      },
+      dt,
+      {
+        minX: laneBounds.minX,
+        maxX: laneBounds.maxX,
+        minZ: ENEMY_MIN_Z,
+        maxZ: castleWallFrontZ - 0.35,
+        drag: reactionProfile.drag,
+        maxSpeedX: reactionProfile.maxSpeedX,
+        maxSpeedZ: reactionProfile.maxSpeedZ,
+      }
+    );
+    enemy.mesh.position.x = integrated.positionX;
+    enemy.mesh.position.z = integrated.positionZ;
+    enemy.velX = integrated.velX;
+    enemy.velZ = integrated.velZ;
 
     let blocked = false;
     for (const wall of walls) {
@@ -1350,10 +1482,14 @@ function updateEnemies(dt) {
 
     if (!blocked) {
       enemy.mesh.position.z += enemy.speed * moveScale * dt;
+      enemy.mesh.position.z = Math.max(ENEMY_MIN_Z, enemy.mesh.position.z);
     } else {
+      if (enemy.velZ > 0) {
+        enemy.velZ = 0;
+      }
       enemy.atCastleWall = false;
       enemy.wallAttackAccumulatorSeconds = 0;
-      if (enemy.hitTimer === 0) {
+      if (enemy.hitTimer === 0 && enemy.staggerFor === 0) {
         setEnemyAnim(enemy.visual, 'run');
       }
     }
@@ -1364,20 +1500,24 @@ function updateEnemies(dt) {
     } else if (!blocked) {
       enemy.atCastleWall = false;
       enemy.wallAttackAccumulatorSeconds = 0;
-      if (enemy.hitTimer === 0) {
+      if (enemy.hitTimer === 0 && enemy.staggerFor === 0) {
         setEnemyAnim(enemy.visual, 'run');
       }
     }
 
     if (enemy.atCastleWall) {
-      if (enemy.hitTimer === 0) {
+      const canAttackWall = enemy.staggerFor === 0 && enemy.stunnedFor === 0;
+      if (enemy.hitTimer === 0 && canAttackWall) {
         setEnemyAnim(enemy.visual, 'attack');
       }
 
-      enemy.wallAttackAccumulatorSeconds += dt * moveScale;
-      while (enemy.wallAttackAccumulatorSeconds >= GOON_ATTACK_INTERVAL_SECONDS && GAME.baseHp > 0) {
-        enemy.wallAttackAccumulatorSeconds -= GOON_ATTACK_INTERVAL_SECONDS;
-        GAME.baseHp = Math.max(0, GAME.baseHp - GOON_ATTACK_DAMAGE);
+      if (canAttackWall) {
+        const attackScale = enemy.frozenFor > 0 ? 0.15 : enemy.slowFactor;
+        enemy.wallAttackAccumulatorSeconds += dt * attackScale;
+        while (enemy.wallAttackAccumulatorSeconds >= GOON_ATTACK_INTERVAL_SECONDS && GAME.baseHp > 0) {
+          enemy.wallAttackAccumulatorSeconds -= GOON_ATTACK_INTERVAL_SECONDS;
+          GAME.baseHp = Math.max(0, GAME.baseHp - GOON_ATTACK_DAMAGE);
+        }
       }
     }
 
@@ -1466,6 +1606,13 @@ function explodeProjectile(projectile) {
       const dealt = projectile.damage * (0.4 + falloff * 0.6);
       damageEnemy(enemy, dealt);
       applyImpactEffects(enemy, projectile.effects, projectile.element, projectile.intensity || 0.8);
+      applyHitReaction(enemy, {
+        source: 'projectile',
+        damage: dealt,
+        intensity: projectile.intensity || 0.8,
+        effects: projectile.effects,
+        impactPoint: point,
+      });
     }
   }
 
@@ -1514,10 +1661,6 @@ function applyImpactEffects(enemy, effects, element, intensity = 0.8) {
     enemy.slowFactor = Math.min(enemy.slowFactor, 0.55);
   }
 
-  if (effects.includes('knockback')) {
-    enemy.mesh.position.z = Math.max(START_Z + 2, enemy.mesh.position.z - (0.6 + intensity * 1.2));
-  }
-
   if (effects.includes('shield_break') && enemy.kind === 'tank') {
     damageEnemy(enemy, 5 + intensity * 7);
   }
@@ -1531,6 +1674,21 @@ function colorForElement(element) {
   if (element === 'storm') return { base: 0xa8eeff, emissive: 0x53b7ff };
   if (element === 'earth') return { base: 0x96ac75, emissive: 0x40542a };
   return { base: 0xc59dff, emissive: 0x5d2e8a };
+}
+
+function zoneColorForSpell(spell, fallback) {
+  const ringColor = spell?.vfx?.ringColor;
+  if (typeof ringColor !== 'string') {
+    return fallback;
+  }
+  const normalized = ringColor.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(normalized)) {
+    return Number.parseInt(normalized.slice(1), 16);
+  }
+  if (/^(0x)?[0-9a-f]{6}$/.test(normalized)) {
+    return Number.parseInt(normalized.replace(/^0x/, ''), 16);
+  }
+  return fallback;
 }
 
 function enemyInsideZone(enemy, zone) {
@@ -1574,7 +1732,7 @@ function updateZones(dt) {
       for (const enemy of enemies) {
         if (enemy.dead) continue;
         if (!enemyInsideZone(enemy, zone)) continue;
-        enemy.mesh.position.z = Math.max(START_Z + 2, enemy.mesh.position.z - zone.pushPerSecond * dt);
+        enemy.mesh.position.z = Math.max(ENEMY_MIN_Z, enemy.mesh.position.z - zone.pushPerSecond * dt);
       }
     } else if (!zone.isLinkedWall) {
       zone.mesh.rotation.y += dt * 0.8;
@@ -1586,8 +1744,23 @@ function updateZones(dt) {
       for (const enemy of enemies) {
         if (enemy.dead) continue;
         if (enemyInsideZone(enemy, zone)) {
-          damageEnemy(enemy, zone.damage * zone.tickRate);
-          applyImpactEffects(enemy, zone.effects, zone.element || 'arcane', zone.kind === 'wave' ? 0.95 : 0.7);
+          const tickDamage = zone.damage * zone.tickRate;
+          const tickIntensity = zone.kind === 'wave' ? 0.95 : 0.7;
+          damageEnemy(enemy, tickDamage);
+          applyImpactEffects(enemy, zone.effects, zone.element || 'arcane', tickIntensity);
+          if (canApplyZoneImpulse(GAME.elapsed, enemy.lastZoneImpulseAt, ZONE_IMPULSE_COOLDOWN_SEC)) {
+            applyHitReaction(enemy, {
+              source: 'zone_tick',
+              damage: tickDamage,
+              intensity: tickIntensity,
+              effects: zone.effects,
+              impactPoint: {
+                x: zone.mesh.position.x,
+                z: zone.z,
+              },
+            });
+            enemy.lastZoneImpulseAt = GAME.elapsed;
+          }
         }
       }
     }

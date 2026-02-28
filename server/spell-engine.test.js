@@ -145,3 +145,23 @@ test('singleTarget converts zone draft into projectile-safe output', () => {
   assert.equal(result.spell.targeting.pattern, 'single_enemy');
   assert.ok(result.spell.numbers.radius <= 1.6);
 });
+
+test('supports nearest_enemy targeting and ring visibility options', () => {
+  const result = validateAndFinalizeSpell(
+    {
+      archetype: 'zone_control',
+      element: 'ice',
+      targeting: { mode: 'nearest_enemy', pattern: 'lane_circle', singleTarget: false },
+      numbers: { damage: 12, radius: 2.6, durationSec: 5, tickRate: 0.7, width: 9, length: 9, laneSpan: 2 },
+      effects: ['slow'],
+      vfx: { palette: 'glacier', intensity: 0.9, shape: 'ring', ringColor: '0x66ccff', visibility: 1.8 },
+      sfx: { cue: 'frost-ring' },
+    },
+    baseContext
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.spell.targeting.mode, 'nearest_enemy');
+  assert.equal(result.spell.vfx.ringColor, '#66ccff');
+  assert.equal(result.spell.vfx.visibility, 1.8);
+});

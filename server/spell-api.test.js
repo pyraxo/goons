@@ -13,7 +13,7 @@ const draft = {
 };
 
 const baseRequest = {
-  prompt: 'tidal wave',
+  prompt: 'sand blast',
   wave: 2,
   mana: 120,
   unlocks: ['fireball', 'wall'],
@@ -23,13 +23,24 @@ const baseRequest = {
   ],
 };
 
+function extractProviderInputPayload(call) {
+  const request = JSON.parse(call.body);
+  const inputText = request?.input?.[0]?.content?.[0]?.text;
+  assert.equal(typeof inputText, 'string');
+  return JSON.parse(inputText);
+}
+
 test('retries when first provider response is token-incomplete without tool call', async () => {
   const originalFetch = global.fetch;
   const originalApiKey = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = 'test-key';
 
   let calls = 0;
-  global.fetch = async () => {
+  const providerCalls = [];
+  global.fetch = async (_url, init = {}) => {
+    providerCalls.push({
+      body: String(init.body ?? ''),
+    });
     calls += 1;
     if (calls === 1) {
       return new Response(
@@ -60,6 +71,11 @@ test('retries when first provider response is token-incomplete without tool call
     assert.equal(result.payload.source, 'llm');
     assert.equal(result.payload.meta.fallbackReason, null);
     assert.equal(result.payload.spell.archetype, 'projectile');
+    assert.equal(result.payload.meta.templateMatch, null);
+    assert.equal(result.payload.meta.expandedPromptPreview, null);
+    const providerInput = extractProviderInputPayload(providerCalls[0]);
+    assert.equal(providerInput.prompt, baseRequest.prompt);
+    assert.equal(providerInput.templateContext, undefined);
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey === undefined) {
@@ -94,6 +110,61 @@ test('falls back when provider never emits a tool call', async () => {
     assert.equal(result.status, 200);
     assert.equal(result.payload.source, 'fallback');
     assert.equal(result.payload.meta.fallbackReason, 'schema_no_tool_call');
+    assert.equal(result.payload.meta.templateMatch, null);
+    assert.equal(result.payload.meta.expandedPromptPreview, null);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  }
+});
+
+test('injects template context and response meta when prompt matches spell template', async () => {
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'test-key';
+
+  const providerCalls = [];
+  global.fetch = async (_url, init = {}) => {
+    providerCalls.push({
+      body: String(init.body ?? ''),
+    });
+    return new Response(
+      JSON.stringify({
+        status: 'completed',
+        output: [{ type: 'function_call', name: 'craft_spell', arguments: JSON.stringify(draft) }],
+        usage: { input_tokens: 90, output_tokens: 40, total_tokens: 130 },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  try {
+    const result = await handleSpellGenerate(
+      {
+        ...baseRequest,
+        prompt: 'cast fireball now',
+      },
+      { requestId: 'test-template-match' }
+    );
+    assert.equal(result.status, 200);
+    assert.equal(result.payload.source, 'llm');
+    assert.deepEqual(result.payload.meta.templateMatch, {
+      key: 'fireball',
+      alias: 'fireball',
+    });
+    assert.equal(typeof result.payload.meta.expandedPromptPreview, 'string');
+    assert.ok(result.payload.meta.expandedPromptPreview.length > 0);
+
+    const providerInput = extractProviderInputPayload(providerCalls[0]);
+    assert.equal(providerInput.prompt, 'cast fireball now');
+    assert.deepEqual(providerInput.templateContext?.matchedKey, 'fireball');
+    assert.deepEqual(providerInput.templateContext?.matchedAlias, 'fireball');
+    assert.equal(typeof providerInput.templateContext?.expandedIntent, 'string');
+    assert.ok(providerInput.templateContext.expandedIntent.length > 0);
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey === undefined) {

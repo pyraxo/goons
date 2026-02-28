@@ -33,9 +33,13 @@ You still have classic spell casting, while prompts can target broader game laye
 ## Dynamic spell engine
 
 - Frontend sends combat context to `POST /api/spells/generate`
+- Backend performs template alias matching (`server/spell-templates.json`) for terse prompts like `fireball`
+- If a template matches, backend appends `templateContext` (`matchedKey`, `matchedAlias`, `expandedIntent`) to the single existing model call
+- Matching order is deterministic: exact alias match first, then whole-word/phrase match in longer prompts (longest alias wins, then template order)
 - Backend validates and normalizes generated spell configs
 - If LLM output is invalid/unavailable, deterministic fallback generates a safe spell
 - Frontend casts and shows `LLM: archetype/effects` or `Fallback cast`
+- API response `meta` now includes `templateMatch` and `expandedPromptPreview`
 
 ## Run locally
 

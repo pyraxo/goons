@@ -1,0 +1,95 @@
+{
+  "version": "spell-templates-v1",
+  "templates": [
+    {
+      "key": "fireball",
+      "aliases": ["fireball", "fire ball", "flame orb", "flaming orb"],
+      "expansion": "A blazing sphere of crimson fire streaks forward and erupts on impact, igniting enemies in the blast radius with burning damage over time and heavy upfront impact."
+    },
+    {
+      "key": "wall",
+      "aliases": ["wall", "stone wall", "arcane wall", "barrier"],
+      "expansion": "A broad shimmering wall sweeps across the lane, forcing enemies back, disrupting their advance, and dealing sustained contact damage to units caught in its path."
+    },
+    {
+      "key": "frost",
+      "aliases": ["frost", "ice ring", "frost ring", "ring of ice"],
+      "expansion": "A circular burst of blue frost blooms across the battlefield, chilling enemies inside its reach, slowing movement speed, and applying freezing control pressure."
+    },
+    {
+      "key": "bolt",
+      "aliases": ["bolt", "lightning bolt", "chain lightning", "zap"],
+      "expansion": "A crackling storm bolt lashes from target to target, arcing electric damage through clustered enemies while applying a brief slowing shock effect."
+    },
+    {
+      "key": "meteor",
+      "aliases": ["meteor", "meteor strike", "falling star", "skyfire"],
+      "expansion": "A burning meteor tears through the sky and slams into the battlefield, creating a massive fiery impact zone that deals high burst damage and leaves scorched ground that continues to burn enemies."
+    },
+    {
+      "key": "quake",
+      "aliases": ["quake", "earthquake", "seismic slam", "ground rupture"],
+      "expansion": "A violent seismic pulse fractures the lane in a widening shockwave, knocking enemies off balance, dealing heavy earth damage, and briefly stunning tightly packed front lines."
+    },
+    {
+      "key": "vortex",
+      "aliases": ["vortex", "arcane vortex", "gravity well", "void whirl"],
+      "expansion": "A swirling arcane vortex opens at target position, dragging nearby enemies inward while dealing sustained magical damage and compressing groups into a vulnerable cluster."
+    },
+    {
+      "key": "sunlance",
+      "aliases": ["sunlance", "solar lance", "sun beam", "radiant spear"],
+      "expansion": "A focused lance of searing sunlight pierces straight through a lane, dealing piercing radiant damage to enemies in a long line and applying a brief burn to survivors."
+    },
+    {
+      "key": "blizzard",
+      "aliases": ["blizzard", "snowstorm", "whiteout", "icy tempest"],
+      "expansion": "A roaming blizzard cloud sweeps over enemy lanes, pelting units with freezing shards that slow movement severely, stack chill effects, and occasionally freeze weaker targets in place."
+    },
+    {
+      "key": "shadowflame",
+      "aliases": ["shadowflame", "dark fire", "black flame", "umbral blaze"],
+      "expansion": "An unstable mix of shadow and flame erupts in smoky black-red bursts, inflicting both immediate fire damage and lingering arcane corruption that weakens enemy resilience."
+    },
+    {
+      "key": "tidal surge",
+      "aliases": ["tidal surge", "tidal wave", "sea surge", "deluge"],
+      "expansion": "A towering wall of enchanted water crashes down the lane, sweeping enemies backward, dealing repeated impact damage, and drenching targets to amplify follow-up storm effects."
+    },
+    {
+      "key": "thornfield",
+      "aliases": ["thornfield", "bramble field", "spike vines", "entangling roots"],
+      "expansion": "A field of razor-thorn vines erupts from the ground, rooting and slowing advancing enemies while dealing constant puncture damage to anything trying to push through."
+    },
+    {
+      "key": "phoenix dive",
+      "aliases": ["phoenix dive", "phoenix strike", "rebirth flame", "firebird dive"],
+      "expansion": "A blazing phoenix silhouette dives into enemy ranks, detonating in a ring of rebirth fire that deals explosive damage, ignites targets, and briefly clears space near the impact point."
+    },
+    {
+      "key": "storm cage",
+      "aliases": ["storm cage", "lightning cage", "thunder prison", "tempest cage"],
+      "expansion": "A cylindrical cage of rotating lightning forms around a target cluster, trapping enemies inside while chaining electric arcs that deal repeated damage and slow escape attempts."
+    },
+    {
+      "key": "time snare",
+      "aliases": ["time snare", "time warp", "chrono field", "temporal lock"],
+      "expansion": "A warped temporal field blooms over the lane, dramatically reducing enemy movement and attack cadence while dealing low steady arcane damage as time pressure crushes trapped units."
+    },
+    {
+      "key": "mirror shards",
+      "aliases": ["mirror shards", "crystal barrage", "prism burst", "glass rain"],
+      "expansion": "A cloud of razor crystal shards refracts and ricochets through enemies, dealing repeated arcane-piercing hits and scattering damage across tightly grouped formations."
+    },
+    {
+      "key": "blood moon",
+      "aliases": ["blood moon", "lunar curse", "crimson moon", "moonhex"],
+      "expansion": "A crimson lunar curse settles over the battlefield, marking enemies with a damage-amplifying hex that increases incoming spell damage and punishes clustered targets over time."
+    },
+    {
+      "key": "dragon breath",
+      "aliases": ["dragon breath", "wyrm flame", "inferno breath", "drake roar"],
+      "expansion": "A cone of molten dragonfire roars forward in a sweeping stream, scorching a wide front arc with intense burn damage and pushing lighter enemies back from the blast."
+    }
+  ]
+}
