@@ -7,7 +7,6 @@ import {
   COMMANDER_MIN_Z,
   GOON_ATTACK_DAMAGE,
   GOON_ATTACK_INTERVAL_SECONDS,
-  KILL_GOLD_REWARD,
   LANE_COUNT,
   MAP_WIDTH,
   START_Z,
@@ -49,7 +48,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
   const walls = [];
   const zones = [];
   const beams = [];
-  const runtimeGoldMultipliers = new Map();
   const activeDots = new Map();
   let runtimeHooks = null;
 
@@ -96,29 +94,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
   function findEnemyById(enemyId) {
     return enemies.find((enemy) => enemy.id === enemyId && !enemy.dead) ?? null;
-  }
-
-  function getRuntimeGoldMultiplier() {
-    let total = 1;
-    for (const entry of runtimeGoldMultipliers.values()) {
-      const multiplier = Number(entry?.multiplier);
-      if (Number.isFinite(multiplier) && multiplier > 0) {
-        total *= multiplier;
-      }
-    }
-    return total;
-  }
-
-  function tickRuntimeMultipliers(dt) {
-    for (const [key, entry] of runtimeGoldMultipliers.entries()) {
-      if (!Number.isFinite(entry.remainingSeconds)) {
-        continue;
-      }
-      entry.remainingSeconds -= dt;
-      if (entry.remainingSeconds <= 0) {
-        runtimeGoldMultipliers.delete(key);
-      }
-    }
   }
 
   function applyDotToEnemy(enemyId, dps, durationSeconds) {
@@ -714,13 +689,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     }
 
     const archetype = String(spell.archetype || 'projectile');
-    const cost = spell.cost || {};
-    const manaCost = clamp(Number(cost.mana || 12), 4, 100);
-
-    if (game.mana < manaCost) {
-      onToast('Not enough mana');
-      return false;
-    }
 
     let casted = false;
     if (archetype === 'zone_control') {
@@ -739,7 +707,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       return false;
     }
 
-    game.mana -= manaCost;
     onHudChanged?.();
     return true;
   }
@@ -793,22 +760,18 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
   const spells = {
     fireball: {
-      cost: 16,
       description: 'Auto-targets nearest enemy and explodes.',
       cast: castFireball,
     },
     wall: {
-      cost: 24,
       description: 'Summons a lane wall to stall enemies.',
       cast: castWall,
     },
     frost: {
-      cost: 32,
       description: 'Freezes enemies in all lanes for 2s.',
       cast: castFrost,
     },
     bolt: {
-      cost: 38,
       description: 'Chain lightning strikes multiple enemies.',
       cast: castBolt,
     },
@@ -846,7 +809,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
   function castSpellByName(spellName, options = {}) {
     const {
       enforceCosts = true,
-      allowLocked = false,
       showToast = true,
     } = options;
 
@@ -858,28 +820,11 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       return false;
     }
 
-    if (!allowLocked && !game.unlocks.includes(spellName)) {
-      if (showToast) {
-        onToast(`Spell not unlocked: ${spellName}`);
-      }
-      return false;
-    }
-
-    if (enforceCosts && game.mana < spell.cost) {
-      if (showToast) {
-        onToast('Not enough mana');
-      }
-      return false;
-    }
-
     const casted = spell.cast();
     if (!casted) {
       return false;
     }
 
-    if (enforceCosts) {
-      game.mana -= spell.cost;
-    }
     if (showToast) {
       onToast(`Cast ${spellName}: ${spell.description}`);
     }
@@ -896,7 +841,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
     return castSpellByName(spellName, {
       enforceCosts: true,
-      allowLocked: false,
       showToast: true,
     });
   }
@@ -905,7 +849,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     return {
       prompt,
       wave: game.wave,
-      mana: game.mana,
       unlocks: game.unlocks,
       nearbyEnemies: enemies
         .filter((enemy) => !enemy.dead)
@@ -1005,17 +948,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     });
   }
 
-  function tryUnlockSpell() {
-    if (game.wave === 3 && !game.unlocks.includes('frost')) {
-      game.unlocks.push('frost');
-      onToast('Unlocked spell: frost');
-    }
-
-    if (game.wave === 6 && !game.unlocks.includes('bolt')) {
-      game.unlocks.push('bolt');
-      onToast('Unlocked spell: bolt');
-    }
-  }
 
   function updateCommander(dt, input) {
     const velocity = new THREE.Vector3();
@@ -1054,7 +986,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
         wave: game.wave,
       });
       onToast(`Wave ${game.wave} begins`);
-      tryUnlockSpell();
       onHudChanged?.();
     }
   }
@@ -1072,10 +1003,8 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     setEnemyAnim(enemy.visual, 'die');
 
     if (slain) {
-      const reward = Math.max(1, Math.round(KILL_GOLD_REWARD * getRuntimeGoldMultiplier()));
       game.score += enemy.worth;
       game.kills += 1;
-      game.gold += reward;
 
       if (comboTimer > 0) {
         comboCount += 1;
@@ -1090,7 +1019,7 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
           lane: enemy.lane,
           kind: enemy.kind,
         },
-        rewardGold: reward,
+        rewardGold: 0,
       });
       runtimeHooks?.onKillCombo?.({
         comboCount,
@@ -1429,8 +1358,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
   }
 
   function updateResources(dt) {
-    game.mana = clamp(game.mana + game.manaRegen * dt, 0, game.maxMana);
-    tickRuntimeMultipliers(dt);
     comboTimer = Math.max(0, comboTimer - dt);
     if (comboTimer === 0) {
       comboCount = 0;
@@ -1443,11 +1370,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     }
 
     if (command.type === 'economy.addGold') {
-      const amount = Number(command.payload?.amount);
-      if (Number.isFinite(amount) && amount > 0) {
-        game.gold += amount;
-        onHudChanged?.();
-      }
       return;
     }
 
@@ -1458,21 +1380,12 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       }
       castSpellByName(spellName, {
         enforceCosts: false,
-        allowLocked: true,
         showToast: false,
       });
       return;
     }
 
     if (command.type === 'economy.addMultiplier') {
-      const key = String(command.payload?.key ?? '').trim();
-      const multiplier = Number(command.payload?.multiplier);
-      if (key && Number.isFinite(multiplier) && multiplier > 0) {
-        runtimeGoldMultipliers.set(key, {
-          multiplier,
-          remainingSeconds: Number(command.payload?.durationSeconds),
-        });
-      }
       return;
     }
 
@@ -1544,7 +1457,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     beams.length = 0;
 
     activeDots.clear();
-    runtimeGoldMultipliers.clear();
     spawnTimer = 0;
     waveTimer = 0;
     comboCount = 0;

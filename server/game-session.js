@@ -1,4 +1,4 @@
-import { createInitialGameState, BASE_Z, CASTLE_WALL_FRONT_Z, COMMANDER_MIN_Z, COMMANDER_MAX_Z, GOON_ATTACK_DAMAGE, GOON_ATTACK_INTERVAL_SECONDS, KILL_GOLD_REWARD, LANE_COUNT, LANE_SPACING, START_Z } from '../src/game/config.js';
+import { createInitialGameState, BASE_Z, CASTLE_WALL_FRONT_Z, COMMANDER_MIN_Z, COMMANDER_MAX_Z, GOON_ATTACK_DAMAGE, GOON_ATTACK_INTERVAL_SECONDS, LANE_COUNT, LANE_SPACING, START_Z } from '../src/game/config.js';
 import { MechanicRuntime } from '../src/runtime/mechanicRuntime.js';
 import { InMemorySandboxStateStore } from '../src/runtime/persistence/sandboxStateStore.js';
 import { createDefaultPrimitiveRegistry } from '../src/runtime/primitives/primitiveRegistry.js';
@@ -49,57 +49,6 @@ function normalizePrompt(prompt) {
     .trim();
 }
 
-function createReservationStore(game) {
-  const reservations = new Map();
-
-  function canSpendGold(amount) {
-    return Number.isFinite(amount) && amount > 0 && game.gold >= amount;
-  }
-
-  function reserveGold(amount) {
-    if (!canSpendGold(amount)) return null;
-    game.gold -= amount;
-    const id = `res_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-    reservations.set(id, amount);
-    return id;
-  }
-
-  function commitReservedGold(id) {
-    if (!reservations.has(id)) return false;
-    reservations.delete(id);
-    return true;
-  }
-
-  function refundReservedGold(id) {
-    const amount = reservations.get(id);
-    if (amount === undefined) return false;
-    reservations.delete(id);
-    game.gold += amount;
-    return true;
-  }
-
-  function getReservedGold() {
-    let total = 0;
-    for (const amount of reservations.values()) {
-      total += amount;
-    }
-    return total;
-  }
-
-  function clearReservations() {
-    reservations.clear();
-  }
-
-  return {
-    canSpendGold,
-    reserveGold,
-    commitReservedGold,
-    refundReservedGold,
-    getReservedGold,
-    clearReservations,
-  };
-}
-
 export class ServerGameSession {
   constructor() {
     this.game = createInitialGameState();
@@ -113,7 +62,6 @@ export class ServerGameSession {
     this.walls = [];
     this.projectiles = [];
     this.zones = [];
-    this.runtimeGoldMultipliers = new Map();
     this.activeDots = new Map();
     this.lastTickAt = Date.now();
     this.spawnTimer = 0;
@@ -130,26 +78,21 @@ export class ServerGameSession {
     this.mechanicRuntime = new MechanicRuntime();
     this.primitiveRegistry = createDefaultPrimitiveRegistry();
     this.sandboxStateStore = new InMemorySandboxStateStore();
-    this.goldReservations = createReservationStore(this.game);
 
     this.spells = {
       fireball: {
-        cost: 16,
         description: 'Auto-targets nearest enemy and explodes.',
         cast: () => this.castFireball(),
       },
       wall: {
-        cost: 24,
         description: 'Summons a lane wall to stall enemies.',
         cast: () => this.castWall(),
       },
       frost: {
-        cost: 32,
         description: 'Freezes enemies in all lanes for 2s.',
         cast: () => this.castFrost(),
       },
       bolt: {
-        cost: 38,
         description: 'Chain lightning strikes multiple enemies.',
         cast: () => this.castBolt(),
       },
@@ -183,8 +126,6 @@ export class ServerGameSession {
     return {
       wave: this.game.wave,
       kills: this.game.kills,
-      gold: this.game.gold,
-      mana: this.game.mana,
       baseHp: this.game.baseHp,
     };
   }
@@ -200,7 +141,6 @@ export class ServerGameSession {
     this.walls = [];
     this.projectiles = [];
     this.zones = [];
-    this.runtimeGoldMultipliers.clear();
     this.activeDots.clear();
     this.spawnTimer = 0;
     this.waveTimer = 0;
@@ -210,7 +150,6 @@ export class ServerGameSession {
     this.wallIdCounter = 1;
     this.projectileIdCounter = 1;
     this.zoneIdCounter = 1;
-    this.goldReservations.clearReservations();
     this.nowToast(`Sandbox reset (${reason})`);
     this.snapshotVersion += 1;
   }
@@ -264,17 +203,8 @@ export class ServerGameSession {
       return false;
     }
 
-    if (enforceCosts && this.game.mana < spell.cost) {
-      if (showToast) this.nowToast('Not enough mana');
-      return false;
-    }
-
     const casted = spell.cast();
     if (!casted) return false;
-
-    if (enforceCosts) {
-      this.game.mana -= spell.cost;
-    }
 
     if (showToast) {
       this.nowToast(`Cast ${spellName}: ${spell.description}`);
@@ -552,10 +482,8 @@ export class ServerGameSession {
     enemy.anim = 'die';
 
     if (slain) {
-      const reward = Math.max(1, Math.round(KILL_GOLD_REWARD * this.getRuntimeGoldMultiplier()));
       this.game.score += enemy.worth;
       this.game.kills += 1;
-      this.game.gold += reward;
 
       if (this.comboTimer > 0) {
         this.comboCount += 1;
@@ -574,7 +502,7 @@ export class ServerGameSession {
         'onEnemyDeath',
         {
           enemy: eventEnemy,
-          rewardGold: reward,
+          rewardGold: 0,
           game: this.runtimeGameContext(),
         },
         (command) => this.applyRuntimeCommand(command)
@@ -744,27 +672,6 @@ export class ServerGameSession {
     }
   }
 
-  getRuntimeGoldMultiplier() {
-    let total = 1;
-    for (const entry of this.runtimeGoldMultipliers.values()) {
-      const multiplier = Number(entry?.multiplier);
-      if (Number.isFinite(multiplier) && multiplier > 0) {
-        total *= multiplier;
-      }
-    }
-    return total;
-  }
-
-  tickRuntimeMultipliers(dt) {
-    for (const [key, entry] of this.runtimeGoldMultipliers.entries()) {
-      if (!Number.isFinite(entry.remainingSeconds)) continue;
-      entry.remainingSeconds -= dt;
-      if (entry.remainingSeconds <= 0) {
-        this.runtimeGoldMultipliers.delete(key);
-      }
-    }
-  }
-
   applyDotToEnemy(enemyId, dps, durationSeconds) {
     const enemy = this.findEnemyById(enemyId);
     if (!enemy) return false;
@@ -827,22 +734,10 @@ export class ServerGameSession {
     }
 
     if (command.type === 'economy.addGold') {
-      const amount = Number(command.payload?.amount);
-      if (Number.isFinite(amount) && amount > 0) {
-        this.game.gold += amount;
-      }
       return;
     }
 
     if (command.type === 'economy.addMultiplier') {
-      const key = String(command.payload?.key ?? '').trim();
-      const multiplier = Number(command.payload?.multiplier);
-      if (key && Number.isFinite(multiplier) && multiplier > 0) {
-        this.runtimeGoldMultipliers.set(key, {
-          multiplier,
-          remainingSeconds: Number(command.payload?.durationSeconds),
-        });
-      }
       return;
     }
 
@@ -878,9 +773,6 @@ export class ServerGameSession {
   }
 
   updateResources(dt) {
-    this.game.mana = clamp(this.game.mana + this.game.manaRegen * dt, 0, this.game.maxMana);
-
-    this.tickRuntimeMultipliers(dt);
     this.comboTimer = Math.max(0, this.comboTimer - dt);
     if (this.comboTimer === 0) this.comboCount = 0;
   }
@@ -940,7 +832,6 @@ export class ServerGameSession {
         {
           prompt: rawPrompt,
           wave: this.game.wave,
-          mana: this.game.mana,
           unlocks: this.game.unlocks,
           nearbyEnemies: this.enemies
             .filter((enemy) => !enemy.dead)
@@ -987,12 +878,6 @@ export class ServerGameSession {
 
   castGeneratedSpell(spell) {
     if (!spell || typeof spell !== 'object') return false;
-    const cost = Number(spell?.cost?.mana);
-
-    if (!Number.isFinite(cost) || cost <= 0 || this.game.mana < cost) {
-      this.nowToast('Not enough mana');
-      return false;
-    }
 
     const archetype = String(spell.archetype || 'projectile');
     const numbers = spell.numbers || {};
@@ -1060,7 +945,6 @@ export class ServerGameSession {
       return false;
     }
 
-    this.game.mana -= cost;
     return true;
   }
 
@@ -1093,36 +977,24 @@ export class ServerGameSession {
   }
 
   async applyArtifact({ envelope, templateVersion, artifact }) {
-    const estimatedGoldCost = Number(envelope?.estimatedGoldCost);
-    const reservationId = this.goldReservations.reserveGold(estimatedGoldCost);
-    if (!reservationId) {
-      throw new Error('insufficient gold for artifact apply');
-    }
-
-    try {
-      const result = await runAgenticApplyWorkflow({
-        artifact,
-        envelope,
-        templateVersion,
-        primitiveRegistry: this.primitiveRegistry,
-        mechanicRuntime: this.mechanicRuntime,
-        sandboxStateStore: this.sandboxStateStore,
-        generateAssets: async () => ({ jobs: [], assets: [] }),
-        resetToBaseline: async () => {
-          this.mechanicRuntime.clear();
-          await this.sandboxStateStore.reset();
-        },
-        logger: console,
-      });
-      this.goldReservations.commitReservedGold(reservationId);
-      return {
-        generatedAssets: result.assets.length,
-        activatedMechanics: result.activatedMechanics,
-      };
-    } catch (error) {
-      this.goldReservations.refundReservedGold(reservationId);
-      throw error;
-    }
+    const result = await runAgenticApplyWorkflow({
+      artifact,
+      envelope,
+      templateVersion,
+      primitiveRegistry: this.primitiveRegistry,
+      mechanicRuntime: this.mechanicRuntime,
+      sandboxStateStore: this.sandboxStateStore,
+      generateAssets: async () => ({ jobs: [], assets: [] }),
+      resetToBaseline: async () => {
+        this.mechanicRuntime.clear();
+        await this.sandboxStateStore.reset();
+      },
+      logger: console,
+    });
+    return {
+      generatedAssets: result.assets.length,
+      activatedMechanics: result.activatedMechanics,
+    };
   }
 
   snapshot() {
@@ -1136,7 +1008,6 @@ export class ServerGameSession {
         x: this.commander.x,
         z: this.commander.z,
       },
-      reservedGold: this.goldReservations.getReservedGold(),
       enemies: this.enemies.slice(0, MAX_SNAPSHOT_ENEMIES).map((enemy) => ({
         id: enemy.id,
         lane: enemy.lane,

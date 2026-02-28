@@ -2,12 +2,12 @@ const ARCHETYPES = ['projectile', 'aoe_burst', 'zone_control', 'chain', 'strike'
 const ELEMENTS = ['fire', 'ice', 'arcane', 'earth', 'storm'];
 const TARGET_MODES = ['nearest', 'nearest_enemy', 'lane', 'lane_cluster', 'ground_point', 'front_cluster', 'commander_facing'];
 const TARGET_PATTERNS = ['single_enemy', 'lane_circle', 'lane_sweep', 'ground_strike', 'line_from_caster'];
-const EFFECTS = ['burn', 'freeze', 'stun', 'knockback', 'slow', 'shield_break'];
+const EFFECTS = ['burn', 'freeze', 'stun', 'knockback', 'slow', 'shield_break', 'root'];
 const VFX_SHAPES = ['orb', 'ring', 'wall', 'arc', 'wave', 'pillar', 'beam', 'cone', 'helix', 'sphereburst', 'crystal'];
 const TRAIL_THEMES = ['torch', 'mist', 'glyph', 'sparks', 'stormthread', 'embers', 'glyphs', 'none'];
 const SFX_LAYERS = ['cast', 'sustain', 'impact', 'ambient'];
-const TRAIL_EFFECTS = ['spark', 'smoke', 'frost_mist', 'lightning_arc', 'ember_trail', 'shadow_wisp', 'holy_motes', 'none'];
-const IMPACT_EFFECTS = ['explosion', 'shatter', 'ripple', 'flash', 'vortex', 'pillar', 'none'];
+const TRAIL_EFFECTS = ['spark', 'smoke', 'frost_mist', 'lightning_arc', 'ember_trail', 'shadow_wisp', 'holy_motes', 'drip', 'rune_glyphs', 'ember_swirl', 'none'];
+const IMPACT_EFFECTS = ['explosion', 'shatter', 'ripple', 'flash', 'vortex', 'pillar', 'crater', 'geyser', 'spore_burst', 'none'];
 const CAST_STYLES = ['launch', 'slam', 'channel', 'sweep', 'pulse', 'smite', 'focus'];
 const HEX_PATTERN = '^#[0-9a-fA-F]{6}$';
 
@@ -18,6 +18,7 @@ const EFFECT_WEIGHTS = {
   knockback: 11,
   slow: 9,
   shield_break: 8,
+  root: 14,
 };
 
 const ANCHOR_PROFILE_ALIASES = {
@@ -68,6 +69,15 @@ const ANCHOR_PROFILE_ALIASES = {
   'flame maze': 'ember labyrinth',
   'burning labyrinth': 'ember labyrinth',
   'cinder maze': 'ember labyrinth',
+  'arcane missiles': 'arcane missiles',
+  'magic missile': 'arcane missiles',
+  'arcane barrage': 'arcane missiles',
+  'mystic bolts': 'arcane missiles',
+  vines: 'vines',
+  'thorn vines': 'vines',
+  'entangle': 'vines',
+  'root': 'vines',
+  'vine snare': 'vines',
 };
 
 const ANCHOR_PROFILES = {
@@ -346,6 +356,25 @@ const ANCHOR_PROFILES = {
     castStyle: 'pulse',
     minLaneSpan: 2,
     minLength: 10,
+  },
+  'arcane missiles': {
+    element: 'arcane',
+    allowedArchetypes: ['projectile', 'aoe_burst'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'orb',
+    preferredTargetMode: 'nearest_enemy',
+    requiredEffects: [],
+    castStyle: 'launch',
+  },
+  vines: {
+    element: 'earth',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_circle',
+    preferredShape: 'ring',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['root', 'slow'],
+    castStyle: 'slam',
+    minLaneSpan: 2,
   },
 };
 
@@ -1466,6 +1495,57 @@ function createPreset(name) {
     };
   }
 
+  if (name === 'arcane missiles') {
+    return {
+      name: 'Arcane Volley',
+      description: 'A rapid triple-burst of violet motes streaks toward enemies, each trailing holy light before detonating.',
+      archetype: 'projectile',
+      element: 'arcane',
+      targeting: { mode: 'nearest', pattern: 'single_enemy', singleTarget: true },
+      numbers: { damage: 22, radius: 1.2, durationSec: 0, speed: 38, width: 2, length: 4, laneSpan: 1 },
+      effects: [],
+      vfx: {
+        palette: 'arcane',
+        intensity: 0.7,
+        shape: 'orb',
+        primaryColor: '#c59dff',
+        secondaryColor: '#9b6dff',
+        trailEffect: 'holy_motes',
+        impactEffect: 'flash',
+        particleDensity: 1.2,
+        screenShake: 0.15,
+      },
+      sfx: { cue: 'arcane-volley' },
+      castStyle: 'launch',
+    };
+  }
+
+  if (name === 'vines') {
+    return {
+      name: 'Thornweave Snare',
+      description: 'Thorny vines erupt from the earth, rooting enemies in place while dealing sustained puncture damage.',
+      archetype: 'zone_control',
+      element: 'earth',
+      targeting: { mode: 'front_cluster', pattern: 'lane_circle', singleTarget: false },
+      numbers: { damage: 8, radius: 3.8, durationSec: 6, tickRate: 0.9, width: 9, length: 8, laneSpan: 2 },
+      effects: ['root', 'slow'],
+      vfx: {
+        palette: 'nature',
+        intensity: 0.8,
+        shape: 'ring',
+        primaryColor: '#4a7a2e',
+        secondaryColor: '#2d5a1a',
+        ringColor: '#3d6b24',
+        trailEffect: 'drip',
+        impactEffect: 'spore_burst',
+        particleDensity: 1.2,
+        screenShake: 0.25,
+      },
+      sfx: { cue: 'vine-snap' },
+      castStyle: 'slam',
+    };
+  }
+
   return {
     name: 'Arcane Missile',
     description: 'A shimmering bolt of raw arcane energy that homes in on the nearest foe.',
@@ -1507,6 +1587,10 @@ export function deterministicFallback(prompt, context) {
     presetName = 'meteor';
   } else if (/(beam|laser|ray|lance|sun.*lance|dragon.*breath|channel|convergence)/.test(raw)) {
     presetName = 'beam';
+  } else if (/(vine|root|thorn|entangle|bramble|snare)/.test(raw)) {
+    presetName = 'vines';
+  } else if (/(arcane.*missile|magic.*missile|mystic.*bolt|arcane.*barrage)/.test(raw)) {
+    presetName = 'arcane missiles';
   } else if (/(volcano|lava|magma|eruption|fire)/.test(raw)) {
     presetName = 'fireball';
   } else if (/(wall|barrier|block|fortify|stone)/.test(raw)) {

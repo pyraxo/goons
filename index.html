@@ -4,12 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>God of Goons</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Cinzel+Decorative:wght@700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <!-- ═══ ONBOARDING OVERLAY ═══ -->
     <div id="onboarding">
       <div class="ob-ember-field" aria-hidden="true"></div>
+      <div class="ob-rune-circle" aria-hidden="true"></div>
 
       <div class="ob-content">
         <div class="ob-title-group">
@@ -34,7 +39,7 @@
             </div>
             <div class="ob-card-body">
               <h3>CAST</h3>
-              <p>Press <kbd>Enter</kbd> for quick spells, or <strong>type any prompt</strong> below to conjure custom AI-generated magic</p>
+              <p><strong>Type any prompt</strong> below to conjure custom AI-generated magic</p>
             </div>
           </div>
 
@@ -62,15 +67,45 @@
       </div>
     </div>
 
+    <!-- ═══ HUD — DISTRIBUTED ACROSS VIEWPORT ═══ -->
     <div id="hud">
-      <div class="stat">Base HP: <span id="baseHp"></span></div>
-      <div class="stat">Mana: <span id="mana"></span></div>
-      <div class="stat">Wave: <span id="wave"></span></div>
-      <div class="stat">Score: <span id="score"></span></div>
-      <div class="stat">Gold: <span id="gold"></span></div>
-      <div class="stat">Reserved: <span id="reservedGold"></span></div>
-      <div class="stat">Unlocked: <span id="unlocks"></span></div>
-      <div id="hint">WASD move commander. Enter opens command bar.</div>
+      <!-- Top center: Title + HP bar -->
+      <div class="hud-top">
+        <div class="hud-title-row">
+          <span class="hud-title-line" aria-hidden="true"></span>
+          <span class="hud-title">GOD OF GOONS</span>
+          <span class="hud-title-line" aria-hidden="true"></span>
+        </div>
+        <div class="hud-hp">
+          <span class="hud-hp-icon" aria-hidden="true">&#x2764;</span>
+          <div class="hud-hp-track">
+            <div class="hud-hp-fill" id="baseHpBar"></div>
+            <div class="hud-hp-sheen" aria-hidden="true"></div>
+          </div>
+          <span class="hud-hp-value" id="baseHp">200</span>
+        </div>
+      </div>
+
+      <!-- Top left: Wave -->
+      <div class="hud-block hud-block--wave">
+        <span class="hud-block-label">WAVE</span>
+        <span class="hud-block-value" id="wave">1</span>
+      </div>
+
+      <!-- Top right: Score -->
+      <div class="hud-block hud-block--score">
+        <span class="hud-block-label">SCORE</span>
+        <span class="hud-block-value" id="score">0</span>
+      </div>
+
+      <!-- Bottom-left above grimoire: Spells -->
+      <div class="hud-spells">
+        <span class="hud-spells-label">SPELLS</span>
+        <span class="hud-spells-value" id="unlocks"></span>
+      </div>
+
+      <!-- Hint floats above prompt bar -->
+      <div id="hint">WASD move</div>
     </div>
 
     <div id="statusStrip">
@@ -80,19 +115,23 @@
       <button id="resetSandboxBtn" type="button">Reset Sandbox</button>
     </div>
 
-    <div id="commandWrap" class="hidden">
-      <input id="commandInput" type="text" autocomplete="off" placeholder="Type a spell..." />
-    </div>
-
+<!-- ═══ GRIMOIRE / HISTORY ═══ -->
     <div id="historyPanel">
-      <h3>Spell History</h3>
+      <div class="history-header">
+        <span class="history-rune" aria-hidden="true">&#x2756;</span>
+        <h3>Grimoire</h3>
+      </div>
+      <h4 class="history-section-title">Replay Script</h4>
+      <pre id="historyScript">No applied prompts yet.</pre>
+      <h4 class="history-section-title history-subtitle">Spell History</h4>
       <ul id="spellHistoryList" aria-live="polite">
         <li class="spell-history-empty">No spell casts yet.</li>
       </ul>
     </div>
 
+    <!-- ═══ PROMPT BAR ═══ -->
     <div id="promptBar">
-      <textarea id="promptInput" placeholder="Type prompt: e.g. summon 3 shield bearers with taunt"></textarea>
+      <textarea id="promptInput" placeholder="Inscribe your incantation..."></textarea>
       <button id="cancelSpellQueueBtn" type="button" disabled>Cancel Queue</button>
     </div>
 

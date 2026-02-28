@@ -121,7 +121,7 @@ export class PromptProcessor {
   getReplayScript() {
     return this.history
       .map((entry, index) => {
-        const header = `${index + 1}. [${entry.appliedAt}] preset=${entry.preset} cost=${entry.cost} types=${entry.types.join(',')} prompt="${entry.prompt.replaceAll('"', '\\"')}"`;
+        const header = `${index + 1}. [${entry.appliedAt}] preset=${entry.preset} types=${entry.types.join(',')} prompt="${entry.prompt.replaceAll('"', '\\"')}"`;
         const details = [];
 
         if (entry.templateVersion) {
@@ -188,15 +188,6 @@ export class PromptProcessor {
       const reasoningEffort = REASONING_EFFORT_PRESET_MAP[preset];
       this.callbacks.onStatus?.(`Applying ${envelope.id} with ${modelName} (reasoning: ${reasoningEffort})...`);
 
-      const reservationId = this.deps.reserveGold(envelope.estimatedGoldCost);
-      if (!reservationId) {
-        this.callbacks.onStatus?.(
-          `Apply blocked for ${envelope.id}: insufficient Gold for ${envelope.estimatedGoldCost}`
-        );
-        this.callbacks.onQueueUpdated?.(this.getQueueSize());
-        continue;
-      }
-
       const result = await this.runWithRetries(envelope, preset);
       if (result.success) {
         const artifact = result.applyDetails?.artifact ?? null;
@@ -219,20 +210,17 @@ export class PromptProcessor {
           }
         } catch (error) {
           const applyError = error instanceof Error ? error.message : 'unknown sandbox apply error';
-          this.deps.refundReservedGold(reservationId);
           this.callbacks.onStatus?.(
-            `Apply failed for ${envelope.id} during sandbox routes: ${applyError}. Gold refunded.`
+            `Apply failed for ${envelope.id} during sandbox routes: ${applyError}.`
           );
           this.callbacks.onQueueUpdated?.(this.getQueueSize());
           continue;
         }
 
-        this.deps.commitReservedGold(reservationId);
         this.history.push({
           id: envelope.id,
           prompt: envelope.rawPrompt,
           types: envelope.classifiedTypes,
-          cost: envelope.estimatedGoldCost,
           preset,
           appliedAt: new Date().toISOString(),
           templateVersion: result.applyDetails?.templateVersion ?? null,
@@ -244,9 +232,8 @@ export class PromptProcessor {
           `Applied ${envelope.id} in ${result.attemptCount} attempt${result.attemptCount === 1 ? '' : 's'}`
         );
       } else {
-        this.deps.refundReservedGold(reservationId);
         this.callbacks.onStatus?.(
-          `Apply failed for ${envelope.id} after ${result.attemptCount} attempts: ${result.error ?? 'unknown error'}. Gold refunded.`
+          `Apply failed for ${envelope.id} after ${result.attemptCount} attempts: ${result.error ?? 'unknown error'}.`
         );
       }
 

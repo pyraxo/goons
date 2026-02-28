@@ -210,6 +210,16 @@
       "key": "ember labyrinth",
       "aliases": ["ember labyrinth", "flame maze", "inferno maze", "burning labyrinth", "cinder maze"],
       "expansion": "A fiery labyrinth of collapsing corridors spins into existence, forcing enemies to churn through burning walls while recursive embers strike from every angle."
+    },
+    {
+      "key": "arcane missiles",
+      "aliases": ["arcane missiles", "magic missile", "arcane barrage", "mystic bolts", "mana bolts"],
+      "expansion": "A rapid triple-burst of glowing arcane orbs streaks toward enemies in quick succession, each mote trailing holy light and detonating in a flash of violet energy on impact."
+    },
+    {
+      "key": "vines",
+      "aliases": ["vines", "thorn vines", "entangle", "entangling vines", "root", "vine snare", "bramble trap"],
+      "expansion": "A tangle of thorny magical vines erupts from the ground, rooting enemies in place while dealing sustained puncture damage and slowing any that break free from the creeping growth."
     }
   ]
 }

@@ -256,7 +256,7 @@ CREATIVE PRIORITIES (most important):
 - Give every spell a memorable, evocative NAME that sounds like it belongs in an epic fantasy game. Never generic names like "Fire Spell". Think "Pyroclastic Ruin", "Shardstorm Aria", "Abyssal Undertow".
 - Write a punchy DESCRIPTION that makes the player feel powerful. One vivid sentence.
 - Choose primaryColor and secondaryColor hex values that create beautiful, dramatic contrast. Think complementary palettes - molten orange with deep crimson, icy cyan with white, toxic green with violet.
-- Pick trailEffect and impactEffect that match the spell's fantasy. A meteor should explode, not ripple. Lightning should flash, not vortex.
+- Pick trailEffect and impactEffect that match the spell's fantasy. A meteor should crater, not ripple. Lightning should flash, not vortex. Poison/acid spells should drip. Nature spells should spore_burst. Water/ice should geyser.
 - Optionally set vfx.particleTheme (embers, mist, glyph, stormthread, torch, sparks) to tune the trail look and vfx.colors with extra layers:
   - "core" for base body
   - "accent" for secondary glow
@@ -277,6 +277,19 @@ ARCHETYPE-SPECIFIC VFX DESIGN (critical for visual quality):
 - projectile/aoe_burst: Single projectile with trail particles and impact explosion. Vivid element-matching colors. impactEffect 'explosion' for fire/earth, 'shatter' for ice, 'flash' for arcane/storm. screenShake 0.4-0.7 for bursts. particleDensity 1.2+ for trails. castStyle 'launch'.
 - strike archetype: Instant sky-to-ground bolt that deals massive burst damage in a radius at the target point. No travel time. Renders as a glowing pillar descending from the sky with a ground impact ring. Use shape 'pillar', pattern 'ground_strike'. castStyle 'smite'. High screenShake (0.5-0.8). impactEffect 'explosion'. Dramatic primaryColor/secondaryColor. particleDensity 1.4+. Perfect for meteors, divine smites, lightning bolts from the sky, seismic slams.
 - beam archetype: Sustained channeled ray from the commander toward enemies in a line. Deals tick damage over its duration. Renders as a glowing cylinder with pulsing core and outer glow. Use shape 'beam', pattern 'line_from_caster', targeting mode 'commander_facing'. castStyle 'focus'. Set durationSec 1.5-4, tickRate 0.2-0.5, length 20-60, width 2-6. impactEffect 'pillar'. Low screenShake (0.1-0.3). Perfect for sun beams, dragon breath, laser rays, energy channels.
+
+AVAILABLE STATUS EFFECTS: burn, freeze, stun, knockback, slow, shield_break, root.
+- root: Immobilizes enemy movement completely (they can still attack walls). Great for nature/vine/snare spells. Pairs well with slow for lingering control zones.
+
+AVAILABLE TRAIL EFFECTS: spark, ember_trail, frost_mist, smoke, lightning_arc, holy_motes, shadow_wisp, drip, rune_glyphs, ember_swirl.
+- drip: Liquid droplets that fall downward. For poison, acid, vine, or nature spells.
+- rune_glyphs: Small spinning ring symbols that glow brightly. For arcane, rune, or sigil spells.
+- ember_swirl: Spiraling embers that orbit wide around the projectile. For fire cyclone or dramatic fire spells.
+
+AVAILABLE IMPACT EFFECTS: explosion, shatter, ripple, flash, vortex, pillar, crater, geyser, spore_burst.
+- crater: Ground ring expanding outward + dust debris. For meteor, ground slam, seismic strikes.
+- geyser: Upward column burst + spray droplets. For water, ice, or eruption spells.
+- spore_burst: Organic expanding cloud of dodecahedrons. For nature, poison, vine, or fungal spells.
 
 MECHANICAL RULES:
 - Return exactly one craft_spell tool call.

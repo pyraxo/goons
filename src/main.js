@@ -20,8 +20,6 @@ const START_Z = -78;
 const ENEMY_MIN_Z = START_Z + 2;
 const BASE_Z = 33;
 const MAP_WIDTH = 52;
-const STARTING_GOLD = 1_000_000;
-const KILL_GOLD_REWARD = 10;
 const CASTLE_WALL_DEPTH = 4;
 const CASTLE_WALL_FRONT_Z = BASE_Z - 18;
 const CASTLE_WALL_Z = CASTLE_WALL_FRONT_Z + CASTLE_WALL_DEPTH * 0.5;
@@ -33,12 +31,8 @@ const DIRECT_SPELL_BACKEND_ORIGIN = import.meta.env.VITE_SPELL_BACKEND_ORIGIN ||
 const MAX_SPELL_HISTORY_ITEMS = 18;
 
 const GAME = {
-  baseHp: 260,
-  maxMana: 120,
-  mana: 120,
-  manaRegen: 14,
+  baseHp: 200,
   score: 0,
-  gold: STARTING_GOLD,
   wave: 1,
   elapsed: 0,
   kills: 0,
@@ -49,28 +43,35 @@ const GAME = {
 
 const SPELLS = {
   fireball: {
-    cost: 16,
     description: 'Auto-targets nearest enemy and explodes.',
     cast: castFireball,
   },
   wall: {
-    cost: 24,
     description: 'Summons a lane wall to stall enemies.',
     cast: castWall,
   },
   frost: {
-    cost: 32,
     description: 'Freezes enemies in all lanes for 2s.',
     cast: castFrost,
   },
   bolt: {
-    cost: 38,
     description: 'Chain lightning strikes multiple enemies.',
     cast: castBolt,
   },
+  arcane_missiles: {
+    description: 'Rapid 3-shot arcane burst at nearest enemies.',
+    cast: castArcaneMissiles,
+  },
+  meteor: {
+    description: 'Massive fireball from the sky. Burns and knocks back.',
+    cast: castMeteor,
+  },
+  vines: {
+    description: 'Thorny vines root and slow enemies in an area.',
+    cast: castVines,
+  },
 };
 
-const goldReservations = new Map();
 const enemies = [];
 const projectiles = [];
 const walls = [];
@@ -80,17 +81,14 @@ let spellQueueProcessing = false;
 
 const dom = {
   baseHp: document.getElementById('baseHp'),
-  mana: document.getElementById('mana'),
+  baseHpBar: document.getElementById('baseHpBar'),
   wave: document.getElementById('wave'),
   score: document.getElementById('score'),
-  gold: document.getElementById('gold'),
-  reservedGold: document.getElementById('reservedGold'),
   unlocks: document.getElementById('unlocks'),
   loopStatus: document.getElementById('loopStatus'),
   queueStatus: document.getElementById('queueStatus'),
   applyStatus: document.getElementById('applyStatus'),
-  commandWrap: document.getElementById('commandWrap'),
-  commandInput: document.getElementById('commandInput'),
+  historyScript: document.getElementById('historyScript'),
   spellHistoryList: document.getElementById('spellHistoryList'),
   promptInput: document.getElementById('promptInput'),
   cancelSpellQueueBtn: document.getElementById('cancelSpellQueueBtn'),
@@ -147,7 +145,6 @@ const input = {
   a: false,
   s: false,
   d: false,
-  commandOpen: false,
 };
 
 const rng = {
@@ -160,11 +157,7 @@ const rng = {
 };
 
 const promptProcessor = new PromptProcessor(
-  {
-    reserveGold,
-    commitReservedGold,
-    refundReservedGold,
-  },
+  {},
   {
     onQueueUpdated: (queueSize) => {
       dom.queueStatus.textContent = `Queue: ${queueSize}`;
@@ -196,21 +189,6 @@ window.addEventListener('resize', onResize);
 window.addEventListener('keydown', onKeyDown);
 window.addEventListener('keyup', onKeyUp);
 
-dom.commandInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    const value = dom.commandInput.value.trim();
-    dom.commandInput.value = '';
-    closeCommand();
-    if (value) {
-      castFromPrompt(value);
-    }
-  }
-
-  if (event.key === 'Escape') {
-    closeCommand();
-  }
-});
-
 setupPromptUi();
 initOnboarding();
 
@@ -225,7 +203,7 @@ function initOnboarding() {
   // bg soundtrack - god of goons (needs user gesture to play)
   const bgm = new Audio('/god-of-goons.mp3');
   bgm.loop = true;
-  bgm.volume = 0.45;
+  bgm.volume = 0.2;
 
   let dismissed = false;
   function dismiss() {
@@ -990,6 +968,7 @@ function createEnemy(kind, lane) {
     slowFor: 0,
     slowFactor: 1,
     stunnedFor: 0,
+    rootedFor: 0,
     burningFor: 0,
     burnDps: 0,
     atCastleWall: false,
@@ -1118,19 +1097,7 @@ function onKeyDown(event) {
     return;
   }
 
-  if (isTypingTarget(event.target) && event.target !== dom.commandInput) {
-    return;
-  }
-
-  if (event.key === 'Enter') {
-    if (input.commandOpen) {
-      return;
-    }
-    openCommand();
-    return;
-  }
-
-  if (input.commandOpen) {
+  if (isTypingTarget(event.target)) {
     return;
   }
 
@@ -1145,18 +1112,6 @@ function onKeyUp(event) {
   if (event.key === 'a' || event.key === 'A') input.a = false;
   if (event.key === 's' || event.key === 'S') input.s = false;
   if (event.key === 'd' || event.key === 'D') input.d = false;
-}
-
-function openCommand() {
-  input.commandOpen = true;
-  dom.commandWrap.classList.remove('hidden');
-  dom.commandInput.focus();
-}
-
-function closeCommand() {
-  input.commandOpen = false;
-  dom.commandWrap.classList.add('hidden');
-  dom.commandInput.blur();
 }
 
 function setupPromptUi() {
@@ -1196,52 +1151,6 @@ function setupPromptUi() {
   dom.applyStatus.textContent = 'No prompt applied yet';
   renderSpellHistory();
   syncSpellQueueUi();
-}
-
-function canSpendGold(amount) {
-  return GAME.gold >= amount;
-}
-
-function reserveGold(amount) {
-  if (!canSpendGold(amount)) {
-    return null;
-  }
-
-  GAME.gold -= amount;
-  const reservationId = `res_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-  goldReservations.set(reservationId, amount);
-  refreshHud();
-  return reservationId;
-}
-
-function commitReservedGold(reservationId) {
-  if (!goldReservations.has(reservationId)) {
-    return false;
-  }
-
-  goldReservations.delete(reservationId);
-  refreshHud();
-  return true;
-}
-
-function refundReservedGold(reservationId) {
-  const amount = goldReservations.get(reservationId);
-  if (amount === undefined) {
-    return false;
-  }
-
-  goldReservations.delete(reservationId);
-  GAME.gold += amount;
-  refreshHud();
-  return true;
-}
-
-function getReservedGold() {
-  let total = 0;
-  for (const amount of goldReservations.values()) {
-    total += amount;
-  }
-  return total;
 }
 
 async function castFromPrompt(rawPrompt) {
@@ -1287,7 +1196,6 @@ async function castQueuedSpell(rawPrompt, historyId) {
   const payload = {
     prompt: rawPrompt,
     wave: GAME.wave,
-    mana: GAME.mana,
     unlocks: GAME.unlocks,
     nearbyEnemies: enemies
       .filter((enemy) => !enemy.dead)
@@ -1318,23 +1226,29 @@ async function castQueuedSpell(rawPrompt, historyId) {
       return;
     }
 
-    if (json?.source === 'fallback') {
+    const spellName = json?.spell?.name || json?.spell?.archetype || 'spell';
+    const archetype = json?.spell?.archetype || '';
+    const element = json?.spell?.element || '';
+    const origin = json?.source || 'unknown';
+    const originTag = origin === 'fallback' ? 'fallback' : 'llm';
+    const detailParts = [spellName];
+    if (archetype) detailParts.push(`[${archetype}]`);
+    if (element) detailParts.push(`(${element})`);
+    detailParts.push(`{${originTag}}`);
+    const detail = detailParts.join(' ');
+
+    if (origin === 'fallback') {
       const reason = json?.meta?.fallbackReason ? ` (${json.meta.fallbackReason})` : '';
       setToast(`Fallback cast${reason}`);
-      updateSpellHistory(
-        historyId,
-        'casted',
-        `Fallback ${json?.spell?.name || json?.spell?.archetype || 'spell'}${reason}`
-      );
+      updateSpellHistory(historyId, 'casted', detail);
       console.warn('[spell] fallback', {
         reason: json?.meta?.fallbackReason || null,
         warnings: json?.meta?.warnings || [],
         latencyMs: json?.meta?.latencyMs,
       });
     } else {
-      const spellName = json?.spell?.name || json?.spell?.archetype || 'spell';
       setToast(spellName);
-      updateSpellHistory(historyId, 'casted', spellName);
+      updateSpellHistory(historyId, 'casted', detail);
     }
   } catch (error) {
     console.warn('[main] spell generation failed', error);
@@ -1414,24 +1328,26 @@ function castFromConfig(spell) {
     };
   }
 
-  const archetype = String(spell.archetype || 'projectile');
-
-  const cost = spell.cost || {};
-  const manaCost = clamp(Number(cost.mana || 12), 8, 65);
-
-  if (GAME.mana < manaCost) {
-    setToast('Not enough mana');
-    return {
-      casted: false,
-      reason: 'Not enough mana',
-    };
+  // Check if a baseline spell matches by name — use its dedicated cast function
+  const spellName = String(spell.name || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+  const baselineKey = Object.keys(SPELLS).find((key) => spellName === key);
+  if (baselineKey && SPELLS[baselineKey].cast) {
+    const casted = SPELLS[baselineKey].cast();
+    if (casted) {
+      refreshHud();
+      return { casted: true, reason: '' };
+    }
   }
+
+  const archetype = String(spell.archetype || 'projectile');
 
   let casted = false;
   if (archetype === 'zone_control') {
     casted = castZoneFromConfig(spell);
   } else if (archetype === 'chain') {
     casted = castChainFromConfig(spell);
+  } else if (archetype === 'strike') {
+    casted = castStrikeFromConfig(spell);
   } else {
     casted = castProjectileFromConfig(spell, archetype);
   }
@@ -1443,7 +1359,6 @@ function castFromConfig(spell) {
     };
   }
 
-  GAME.mana -= manaCost;
   refreshHud();
   return {
     casted: true,
@@ -1671,6 +1586,157 @@ function castBolt() {
   });
 }
 
+function castArcaneMissiles() {
+  // Rapid-fire 3-shot burst at nearest enemies
+  const liveEnemies = enemies.filter((e) => !e.dead);
+  if (!liveEnemies.length) {
+    setToast('No targets for arcane missiles');
+    return false;
+  }
+  const sorted = [...liveEnemies].sort((a, b) => {
+    const da = a.mesh.position.distanceTo(commander.mesh.position);
+    const db = b.mesh.position.distanceTo(commander.mesh.position);
+    return da - db;
+  });
+  for (let i = 0; i < 3; i++) {
+    const target = sorted[i % sorted.length];
+    const spell = {
+      archetype: 'projectile',
+      element: 'arcane',
+      targeting: { mode: 'nearest' },
+      numbers: { damage: 22, radius: 1.2, speed: 38, durationSec: 0 },
+      effects: [],
+      vfx: {
+        intensity: 0.7,
+        shape: 'orb',
+        size: 0.6,
+        trailEffect: 'holy_motes',
+        impactEffect: 'flash',
+        primaryColor: '#c59dff',
+        secondaryColor: '#9b6dff',
+      },
+    };
+    const power = 0.7;
+    const baseRadius = 0.3;
+    const projectileMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(baseRadius, 8, 8),
+      new THREE.MeshStandardMaterial({
+        color: 0xc59dff,
+        emissive: 0x5d2e8a,
+        emissiveIntensity: 0.55 + power * 0.45,
+      })
+    );
+    const offset = (i - 1) * 1.2;
+    projectileMesh.position.copy(commander.mesh.position).add(new THREE.Vector3(offset, 1.8 + i * 0.4, -0.5));
+    projectileMesh.castShadow = true;
+    scene.add(projectileMesh);
+    const glowLight = new THREE.PointLight(0xc59dff, power * 1.5, 4);
+    projectileMesh.add(glowLight);
+    projectiles.push({
+      kind: 'projectile',
+      mesh: projectileMesh,
+      target,
+      speed: 38,
+      damage: 22,
+      splash: 1.2,
+      effects: [],
+      element: 'arcane',
+      intensity: power,
+      spellVfx: spell.vfx,
+      glowLight,
+    });
+  }
+  return true;
+}
+
+function castMeteor() {
+  // Delayed overhead strike — massive AoE burst with burn + knockback
+  const target = selectTarget({ mode: 'front_cluster' });
+  if (!target) {
+    setToast('No target for meteor');
+    return false;
+  }
+  const impactPos = target.mesh.position.clone();
+  impactPos.y = 0.5;
+
+  // Shadow warning circle on ground
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(2.8, 20),
+    new THREE.MeshStandardMaterial({
+      color: 0xff4400,
+      emissive: 0xff4400,
+      emissiveIntensity: 0.5,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    })
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.set(impactPos.x, 0.06, impactPos.z);
+  scene.add(shadow);
+
+  // Meteor projectile from sky
+  const meteorMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(1.1, 10, 10),
+    new THREE.MeshStandardMaterial({
+      color: 0xff6622,
+      emissive: 0x8c2b00,
+      emissiveIntensity: 1.8,
+    })
+  );
+  meteorMesh.position.set(impactPos.x + (Math.random() - 0.5) * 3, 38, impactPos.z - 25);
+  meteorMesh.castShadow = true;
+  scene.add(meteorMesh);
+  const meteorGlow = new THREE.PointLight(0xff6622, 4, 12);
+  meteorMesh.add(meteorGlow);
+
+  projectiles.push({
+    kind: 'strike',
+    mesh: meteorMesh,
+    target,
+    strikeTarget: impactPos.clone(),
+    speed: 36,
+    damage: 85,
+    splash: 4.0,
+    effects: ['burn', 'knockback'],
+    element: 'fire',
+    intensity: 1.3,
+    spellVfx: {
+      intensity: 1.3,
+      impactEffect: 'crater',
+      trailEffect: 'ember_trail',
+      primaryColor: '#ff6622',
+      secondaryColor: '#ff2200',
+      screenShake: 0.8,
+      particleDensity: 1.6,
+    },
+    glowLight: meteorGlow,
+    meteorShadow: shadow,
+  });
+  return true;
+}
+
+function castVines() {
+  // Lingering zone that roots enemies
+  return castZoneFromConfig({
+    archetype: 'zone_control',
+    element: 'earth',
+    targeting: { mode: 'front_cluster' },
+    numbers: { damage: 8, radius: 3.8, durationSec: 6, tickRate: 0.9 },
+    effects: ['root', 'slow'],
+    vfx: {
+      intensity: 0.8,
+      shape: 'ring',
+      primaryColor: '#4a7a2e',
+      secondaryColor: '#2d5a1a',
+      ringColor: '#3d6b24',
+      trailEffect: 'drip',
+      impactEffect: 'spore_burst',
+      particleDensity: 1.2,
+    },
+  });
+}
+
 const trailParticles = [];
 const impactFlashes = [];
 let shakeIntensity = 0;
@@ -1707,6 +1773,15 @@ function spawnTrailParticle(position, spell) {
   } else if (trail === 'holy_motes' || trail === 'shadow_wisp') {
     size = 0.1 + Math.random() * 0.15;
     geo = new THREE.OctahedronGeometry(size, 0);
+  } else if (trail === 'drip') {
+    size = 0.08 + Math.random() * 0.12;
+    geo = new THREE.SphereGeometry(size, 4, 4);
+  } else if (trail === 'rune_glyphs') {
+    size = 0.12 + Math.random() * 0.14;
+    geo = new THREE.RingGeometry(size * 0.4, size, 6);
+  } else if (trail === 'ember_swirl') {
+    size = 0.1 + Math.random() * 0.16;
+    geo = new THREE.SphereGeometry(size, 4, 4);
   } else {
     return;
   }
@@ -1714,7 +1789,7 @@ function spawnTrailParticle(position, spell) {
   const mat = new THREE.MeshStandardMaterial({
     color,
     emissive: color,
-    emissiveIntensity: trail === 'lightning_arc' ? 1.5 : 0.9,
+    emissiveIntensity: trail === 'lightning_arc' ? 1.5 : trail === 'rune_glyphs' ? 1.8 : 0.9,
     transparent: true,
     opacity: 0.85,
   });
@@ -1726,15 +1801,20 @@ function spawnTrailParticle(position, spell) {
   mesh.position.z += (Math.random() - 0.5) * 0.6;
   if (trail === 'lightning_arc') {
     mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+  } else if (trail === 'rune_glyphs') {
+    mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
   }
   scene.add(mesh);
 
+  const isDrip = trail === 'drip';
+  const isSwirl = trail === 'ember_swirl';
   trailParticles.push({
     mesh,
-    life: 0.25 + Math.random() * 0.35,
-    velY: (trail === 'ember_trail' || trail === 'spark') ? 1.5 + Math.random() * 2 : 0.3 + Math.random() * 0.6,
-    drift: (Math.random() - 0.5) * 1.2,
-    fadeRate: trail === 'smoke' || trail === 'frost_mist' ? 1.2 : 2.5,
+    life: isDrip ? 0.2 + Math.random() * 0.2 : 0.25 + Math.random() * 0.35,
+    velY: isDrip ? -(3 + Math.random() * 4) : isSwirl ? 0.8 + Math.random() * 1.2 : (trail === 'ember_trail' || trail === 'spark') ? 1.5 + Math.random() * 2 : 0.3 + Math.random() * 0.6,
+    drift: isSwirl ? (Math.random() - 0.5) * 3.5 : (Math.random() - 0.5) * 1.2,
+    fadeRate: isDrip ? 3.5 : trail === 'smoke' || trail === 'frost_mist' ? 1.2 : trail === 'rune_glyphs' ? 3.0 : 2.5,
+    spin: trail === 'rune_glyphs' ? 4 + Math.random() * 6 : isSwirl ? 5 + Math.random() * 8 : 0,
   });
 }
 
@@ -1859,6 +1939,121 @@ function spawnImpactEffect(position, spell) {
     pillar.position.y = 4;
     scene.add(pillar);
     impactFlashes.push({ mesh: pillar, life: 0.35, velX: 0, velY: 0, velZ: 0 });
+  } else if (impact === 'crater') {
+    // ground depression ring + dust cloud
+    const craterRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.8, 1.8, 20),
+      new THREE.MeshStandardMaterial({
+        color: 0x8b7355,
+        emissive: secondary,
+        emissiveIntensity: 0.6,
+        transparent: true,
+        opacity: 0.7,
+        side: THREE.DoubleSide,
+      })
+    );
+    craterRing.position.copy(position);
+    craterRing.position.y = 0.05;
+    craterRing.rotation.x = -Math.PI / 2;
+    scene.add(craterRing);
+    impactFlashes.push({ mesh: craterRing, life: 0.6, velX: 0, velY: 0, velZ: 0, isCrater: true });
+    // dust chunks
+    const dustCount = Math.floor(6 * density);
+    for (let i = 0; i < dustCount; i++) {
+      const dSize = 0.15 + Math.random() * 0.25;
+      const dust = new THREE.Mesh(
+        new THREE.SphereGeometry(dSize, 4, 4),
+        new THREE.MeshStandardMaterial({
+          color: 0xa0886a,
+          emissive: primary,
+          emissiveIntensity: 0.3,
+          transparent: true,
+          opacity: 0.65,
+        })
+      );
+      dust.position.copy(position);
+      const angle = (i / dustCount) * Math.PI * 2;
+      const speed = 2 + Math.random() * 3;
+      scene.add(dust);
+      impactFlashes.push({
+        mesh: dust,
+        life: 0.4 + Math.random() * 0.3,
+        velX: Math.cos(angle) * speed,
+        velY: 1.5 + Math.random() * 3,
+        velZ: Math.sin(angle) * speed,
+      });
+    }
+  } else if (impact === 'geyser') {
+    // upward column burst
+    const geyserCol = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.8, 6, 8),
+      new THREE.MeshStandardMaterial({
+        color: primary,
+        emissive: secondary,
+        emissiveIntensity: 1.8,
+        transparent: true,
+        opacity: 0.8,
+      })
+    );
+    geyserCol.position.copy(position);
+    geyserCol.position.y = 3;
+    scene.add(geyserCol);
+    impactFlashes.push({ mesh: geyserCol, life: 0.45, velX: 0, velY: 4, velZ: 0, isGeyser: true });
+    // spray droplets
+    const sprayCount = Math.floor(5 * density);
+    for (let i = 0; i < sprayCount; i++) {
+      const dropSize = 0.1 + Math.random() * 0.18;
+      const drop = new THREE.Mesh(
+        new THREE.SphereGeometry(dropSize, 4, 4),
+        new THREE.MeshStandardMaterial({
+          color: secondary,
+          emissive: primary,
+          emissiveIntensity: 1.0,
+          transparent: true,
+          opacity: 0.75,
+        })
+      );
+      drop.position.copy(position);
+      drop.position.y += 4 + Math.random() * 2;
+      const angle = Math.random() * Math.PI * 2;
+      scene.add(drop);
+      impactFlashes.push({
+        mesh: drop,
+        life: 0.5 + Math.random() * 0.3,
+        velX: Math.cos(angle) * (1.5 + Math.random() * 2),
+        velY: 3 + Math.random() * 4,
+        velZ: Math.sin(angle) * (1.5 + Math.random() * 2),
+      });
+    }
+  } else if (impact === 'spore_burst') {
+    // organic expanding cloud
+    const sporeCount = Math.floor(7 * density);
+    for (let i = 0; i < sporeCount; i++) {
+      const sSize = 0.2 + Math.random() * 0.35;
+      const spore = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(sSize, 0),
+        new THREE.MeshStandardMaterial({
+          color: i % 2 === 0 ? primary : secondary,
+          emissive: primary,
+          emissiveIntensity: 0.7,
+          transparent: true,
+          opacity: 0.7,
+        })
+      );
+      spore.position.copy(position);
+      const angle = (i / sporeCount) * Math.PI * 2;
+      const speed = 1.5 + Math.random() * 2;
+      scene.add(spore);
+      impactFlashes.push({
+        mesh: spore,
+        life: 0.6 + Math.random() * 0.4,
+        velX: Math.cos(angle) * speed,
+        velY: 0.5 + Math.random() * 1.5,
+        velZ: Math.sin(angle) * speed,
+        isSpore: true,
+        spin: 2 + Math.random() * 4,
+      });
+    }
   } else {
     const flash = new THREE.Mesh(
       new THREE.SphereGeometry(0.8, 8, 8),
@@ -1888,6 +2083,10 @@ function updateTrailParticles(dt) {
     p.life -= dt;
     p.mesh.position.y += p.velY * dt;
     p.mesh.position.x += p.drift * dt;
+    if (p.spin) {
+      p.mesh.rotation.y += p.spin * dt;
+      p.mesh.rotation.z += p.spin * 0.3 * dt;
+    }
     p.mesh.material.opacity = Math.max(0, p.mesh.material.opacity - p.fadeRate * dt);
     if (p.life <= 0 || p.mesh.material.opacity <= 0) {
       scene.remove(p.mesh);
@@ -1905,7 +2104,7 @@ function updateImpactFlashes(dt) {
     f.mesh.position.x += f.velX * dt;
     f.mesh.position.y += f.velY * dt;
     f.mesh.position.z += f.velZ * dt;
-    if (f.velY !== 0 && !f.isRipple && !f.isVortex) {
+    if (f.velY !== 0 && !f.isRipple && !f.isVortex && !f.isGeyser) {
       f.velY -= 12 * dt;
     }
     if (f.isRipple) {
@@ -1914,6 +2113,19 @@ function updateImpactFlashes(dt) {
     if (f.isVortex) {
       f.mesh.rotation.y += (f.spin || 6) * dt;
       f.mesh.scale.multiplyScalar(1 + dt * 3);
+    }
+    if (f.isCrater) {
+      f.mesh.scale.multiplyScalar(1 + dt * 4);
+    }
+    if (f.isGeyser) {
+      f.mesh.scale.x *= 1 - dt * 1.5;
+      f.mesh.scale.z *= 1 - dt * 1.5;
+    }
+    if (f.isSpore) {
+      f.mesh.rotation.y += (f.spin || 3) * dt;
+      f.velX *= 1 - dt * 2;
+      f.velZ *= 1 - dt * 2;
+      f.mesh.scale.multiplyScalar(1 + dt * 1.5);
     }
     const fadeProgress = Math.max(0, f.life / 0.4);
     f.mesh.material.opacity = fadeProgress;
@@ -1942,38 +2154,93 @@ function updateScreenShake(dt) {
 function spawnZoneParticle(position, vfx, mode) {
   if (zoneParticles.length >= 120) return;
   const color = parseHexColor(vfx?.secondaryColor) || parseHexColor(vfx?.primaryColor) || 0xffffff;
-  const size = mode === 'spray' ? 0.1 + Math.random() * 0.15 : 0.08 + Math.random() * 0.12;
-  const geo = mode === 'spray'
-    ? new THREE.SphereGeometry(size, 4, 4)
-    : new THREE.OctahedronGeometry(size, 0);
+  let size, geo;
+  if (mode === 'spray') {
+    size = 0.1 + Math.random() * 0.15;
+    geo = new THREE.SphereGeometry(size, 4, 4);
+  } else if (mode === 'orbit') {
+    size = 0.08 + Math.random() * 0.1;
+    geo = new THREE.SphereGeometry(size, 5, 5);
+  } else if (mode === 'pulse') {
+    size = 0.12 + Math.random() * 0.15;
+    geo = new THREE.RingGeometry(size * 0.5, size, 8);
+  } else {
+    size = 0.08 + Math.random() * 0.12;
+    geo = new THREE.OctahedronGeometry(size, 0);
+  }
   const mat = new THREE.MeshStandardMaterial({
     color,
     emissive: color,
-    emissiveIntensity: mode === 'spray' ? 1.2 : 0.8,
+    emissiveIntensity: mode === 'spray' ? 1.2 : mode === 'pulse' ? 1.5 : 0.8,
     transparent: true,
     opacity: 0.75,
+    side: mode === 'pulse' ? THREE.DoubleSide : THREE.FrontSide,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(position);
+  if (mode === 'pulse') {
+    mesh.rotation.x = -Math.PI / 2;
+  }
   scene.add(mesh);
-  const life = mode === 'spray' ? 0.3 + Math.random() * 0.3 : 0.6 + Math.random() * 0.5;
-  zoneParticles.push({
-    mesh,
-    life,
-    velY: mode === 'spray' ? 2 + Math.random() * 3 : 1.2 + Math.random() * 2,
-    driftX: mode === 'spray' ? (Math.random() - 0.5) * 3 : (Math.random() - 0.5) * 0.8,
-    driftZ: mode === 'spray' ? -(1 + Math.random() * 2) : (Math.random() - 0.5) * 0.5,
-    fadeRate: 1 / life,
-  });
+
+  if (mode === 'orbit') {
+    const angle = Math.random() * Math.PI * 2;
+    const orbitRadius = 1.2 + Math.random() * 1.5;
+    const life = 0.8 + Math.random() * 0.6;
+    zoneParticles.push({
+      mesh,
+      life,
+      velY: 0.4 + Math.random() * 0.6,
+      driftX: 0,
+      driftZ: 0,
+      fadeRate: 1 / life,
+      orbit: true,
+      orbitAngle: angle,
+      orbitRadius,
+      orbitSpeed: 3 + Math.random() * 3,
+      orbitCenterX: position.x,
+      orbitCenterZ: position.z,
+    });
+  } else if (mode === 'pulse') {
+    const life = 0.4 + Math.random() * 0.25;
+    zoneParticles.push({
+      mesh,
+      life,
+      velY: 0,
+      driftX: 0,
+      driftZ: 0,
+      fadeRate: 1 / life,
+      isPulse: true,
+    });
+  } else {
+    const life = mode === 'spray' ? 0.3 + Math.random() * 0.3 : 0.6 + Math.random() * 0.5;
+    zoneParticles.push({
+      mesh,
+      life,
+      velY: mode === 'spray' ? 2 + Math.random() * 3 : 1.2 + Math.random() * 2,
+      driftX: mode === 'spray' ? (Math.random() - 0.5) * 3 : (Math.random() - 0.5) * 0.8,
+      driftZ: mode === 'spray' ? -(1 + Math.random() * 2) : (Math.random() - 0.5) * 0.5,
+      fadeRate: 1 / life,
+    });
+  }
 }
 
 function updateZoneParticles(dt) {
   for (let i = zoneParticles.length - 1; i >= 0; i--) {
     const p = zoneParticles[i];
     p.life -= dt;
-    p.mesh.position.y += p.velY * dt;
-    p.mesh.position.x += p.driftX * dt;
-    p.mesh.position.z += p.driftZ * dt;
+    if (p.orbit) {
+      p.orbitAngle += p.orbitSpeed * dt;
+      p.mesh.position.x = p.orbitCenterX + Math.cos(p.orbitAngle) * p.orbitRadius;
+      p.mesh.position.z = p.orbitCenterZ + Math.sin(p.orbitAngle) * p.orbitRadius;
+      p.mesh.position.y += p.velY * dt;
+    } else if (p.isPulse) {
+      p.mesh.scale.multiplyScalar(1 + dt * 10);
+    } else {
+      p.mesh.position.y += p.velY * dt;
+      p.mesh.position.x += p.driftX * dt;
+      p.mesh.position.z += p.driftZ * dt;
+    }
     p.mesh.material.opacity = Math.max(0, p.life * p.fadeRate);
     if (p.life <= 0) {
       scene.remove(p.mesh);
@@ -2358,6 +2625,90 @@ function castChainFromConfig(spell) {
   return true;
 }
 
+function castStrikeFromConfig(spell) {
+  const target = selectTarget(spell?.targeting || { mode: 'front_cluster' });
+  if (!target) {
+    setToast('No target for strike');
+    return false;
+  }
+
+  const damage = clamp(Number(spell?.numbers?.damage || 70), 8, 150);
+  const radius = clamp(Number(spell?.numbers?.radius || 3.5), 1, 8);
+  const effects = Array.isArray(spell?.effects) ? spell.effects : [];
+  const element = spell?.element || 'fire';
+  const elementColor = colorForElement(element);
+  const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
+  const secondaryHex = parseHexColor(spell?.vfx?.secondaryColor);
+  const mainColor = primaryHex ?? elementColor.base;
+  const glowColor = secondaryHex ?? elementColor.emissive;
+  const intensity = clamp(Number(spell?.vfx?.intensity || 1.2), 0.4, 2.0);
+
+  const impactPos = target.mesh.position.clone();
+  impactPos.y = 0;
+
+  // Ground shadow warning
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(radius * 0.7, 20),
+    new THREE.MeshStandardMaterial({
+      color: mainColor,
+      emissive: mainColor,
+      emissiveIntensity: 0.5,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    })
+  );
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.set(impactPos.x, 0.06, impactPos.z);
+  scene.add(shadow);
+
+  // Projectile from the sky — spawn far above and behind (negative Z = away from camera)
+  const strikeMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.9 + intensity * 0.3, 10, 10),
+    new THREE.MeshStandardMaterial({
+      color: mainColor,
+      emissive: glowColor,
+      emissiveIntensity: 1.8,
+    })
+  );
+  strikeMesh.position.set(
+    impactPos.x + (Math.random() - 0.5) * 3,
+    38,
+    impactPos.z - 25
+  );
+  strikeMesh.castShadow = true;
+  scene.add(strikeMesh);
+
+  const strikeGlow = new THREE.PointLight(mainColor, 4, 12);
+  strikeMesh.add(strikeGlow);
+
+  // Strike projectiles remember their ground target position so they still land even if the enemy dies
+  projectiles.push({
+    kind: 'strike',
+    mesh: strikeMesh,
+    target,
+    strikeTarget: impactPos.clone(),
+    speed: clamp(Number(spell?.numbers?.speed || 34), 16, 50),
+    damage,
+    splash: radius,
+    effects,
+    element,
+    intensity,
+    spellVfx: spell?.vfx || {
+      impactEffect: 'crater',
+      trailEffect: 'ember_trail',
+      primaryColor: spell?.vfx?.primaryColor || '#ff6622',
+      secondaryColor: spell?.vfx?.secondaryColor || '#ff2200',
+      screenShake: 0.7,
+      particleDensity: 1.5,
+    },
+    glowLight: strikeGlow,
+    meteorShadow: shadow,
+  });
+
+  return true;
+}
+
 function laneSpanFromNumbers(numbers, width, enforceSweepSpan = false) {
   const laneSpanRaw = Number(numbers?.laneSpan);
   const explicitSpan = Number.isFinite(laneSpanRaw) ? Math.round(laneSpanRaw) : 0;
@@ -2599,6 +2950,9 @@ function updateEnemies(dt) {
     if (enemy.stunnedFor > 0) {
       enemy.stunnedFor = Math.max(0, enemy.stunnedFor - dt);
     }
+    if (enemy.rootedFor > 0) {
+      enemy.rootedFor = Math.max(0, enemy.rootedFor - dt);
+    }
     if (enemy.burningFor > 0) {
       enemy.burningFor = Math.max(0, enemy.burningFor - dt);
       damageEnemy(enemy, enemy.burnDps * dt);
@@ -2614,7 +2968,7 @@ function updateEnemies(dt) {
       }
     }
 
-    const movementInterrupted = enemy.staggerFor > 0 || enemy.stunnedFor > 0;
+    const movementInterrupted = enemy.staggerFor > 0 || enemy.stunnedFor > 0 || enemy.rootedFor > 0;
     const moveScale = movementInterrupted ? 0 : enemy.frozenFor > 0 ? 0.15 : enemy.slowFactor;
     enemy.visual.playbackScale = moveScale;
 
@@ -2719,7 +3073,6 @@ function destroyEnemy(index, slain) {
   if (slain) {
     GAME.score += enemy.worth;
     GAME.kills += 1;
-    GAME.gold += KILL_GOLD_REWARD;
   }
 }
 
@@ -2747,7 +3100,38 @@ function updateProjectiles(dt) {
       continue;
     }
 
+    // Strike projectiles track a fixed ground point — don't remove when target dies
+    if (projectile.kind === 'strike') {
+      const groundTarget = projectile.strikeTarget;
+      const dir = groundTarget.clone().sub(projectile.mesh.position);
+      const step = projectile.speed * dt;
+
+      if (dir.lengthSq() <= step * step) {
+        projectile.mesh.position.copy(groundTarget);
+        explodeProjectile(projectile);
+        if (projectile.glowLight) projectile.mesh.remove(projectile.glowLight);
+        if (projectile.meteorShadow) {
+          scene.remove(projectile.meteorShadow);
+          projectile.meteorShadow.geometry.dispose();
+          projectile.meteorShadow.material.dispose();
+        }
+        scene.remove(projectile.mesh);
+        projectiles.splice(i, 1);
+      } else {
+        projectile.mesh.position.add(dir.normalize().multiplyScalar(step));
+        if (projectile.spellVfx && projectile.spellVfx.trailEffect !== 'none') {
+          spawnTrailParticle(projectile.mesh.position, { vfx: projectile.spellVfx });
+        }
+      }
+      continue;
+    }
+
     if (!projectile.target || projectile.target.dead || !enemies.includes(projectile.target)) {
+      if (projectile.meteorShadow) {
+        scene.remove(projectile.meteorShadow);
+        projectile.meteorShadow.geometry.dispose();
+        projectile.meteorShadow.material.dispose();
+      }
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
       continue;
@@ -2762,6 +3146,11 @@ function updateProjectiles(dt) {
       projectile.mesh.position.add(dir);
       explodeProjectile(projectile);
       if (projectile.glowLight) projectile.mesh.remove(projectile.glowLight);
+      if (projectile.meteorShadow) {
+        scene.remove(projectile.meteorShadow);
+        projectile.meteorShadow.geometry.dispose();
+        projectile.meteorShadow.material.dispose();
+      }
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
       continue;
@@ -2842,6 +3231,10 @@ function applyImpactEffects(enemy, effects, element, intensity = 0.8) {
   if (effects.includes('slow')) {
     enemy.slowFor = Math.max(enemy.slowFor, 1.8 * intensity + 0.5);
     enemy.slowFactor = Math.min(enemy.slowFactor, 0.55);
+  }
+
+  if (effects.includes('root')) {
+    enemy.rootedFor = Math.max(enemy.rootedFor, 1.6 * intensity + 0.6);
   }
 
   if (effects.includes('shield_break') && enemy.kind === 'tank') {
@@ -3006,17 +3399,14 @@ function updateZones(dt) {
 }
 
 function updateResources(dt) {
-  GAME.mana = clamp(GAME.mana + GAME.manaRegen * dt, 0, GAME.maxMana);
 }
 
 function updateHud() {
   dom.baseHp.textContent = Math.max(0, Math.floor(GAME.baseHp));
-  dom.mana.textContent = `${Math.floor(GAME.mana)} / ${GAME.maxMana}`;
   dom.wave.textContent = String(GAME.wave);
   dom.score.textContent = String(GAME.score);
-  dom.gold.textContent = Math.floor(GAME.gold).toLocaleString();
-  dom.reservedGold.textContent = Math.floor(getReservedGold()).toLocaleString();
   dom.unlocks.textContent = GAME.unlocks.join(', ');
+  if (dom.baseHpBar) dom.baseHpBar.style.width = `${Math.max(0, (GAME.baseHp / 200) * 100)}%`;
 }
 
 function refreshHud() {
@@ -3067,7 +3457,7 @@ function gameOver() {
   deathState.cameraStart = camera.position.clone();
 
   // Hide HUD elements during death cinematic
-  for (const el of [dom.commandWrap, document.getElementById('hud'), document.getElementById('statusStrip'), document.getElementById('historyPanel'), document.getElementById('promptBar')]) {
+  for (const el of [document.getElementById('hud'), document.getElementById('statusStrip'), document.getElementById('historyPanel'), document.getElementById('promptBar')]) {
     if (el) el.style.transition = 'opacity 1.5s';
     if (el) el.style.opacity = '0';
   }
