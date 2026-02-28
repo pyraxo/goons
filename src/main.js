@@ -52,10 +52,6 @@ const GAME = {
   gameOver: false,
 };
 
-const BASELINE_HISTORY_TEXT =
-  `No applied prompts yet.\n` +
-  `Sandbox baseline: no generated ui/mechanics/units/actions.\n` +
-  `Template: ${PROMPT_TEMPLATE_VERSION}`;
 
 const SPELLS = {
   fireball: {
@@ -97,14 +93,10 @@ const dom = {
   gold: document.getElementById('gold'),
   reservedGold: document.getElementById('reservedGold'),
   unlocks: document.getElementById('unlocks'),
-  loopStatus: document.getElementById('loopStatus'),
-  queueStatus: document.getElementById('queueStatus'),
-  applyStatus: document.getElementById('applyStatus'),
   commandWrap: document.getElementById('commandWrap'),
   commandInput: document.getElementById('commandInput'),
   preview: document.getElementById('preview'),
   previewBody: document.getElementById('previewBody'),
-  historyScript: document.getElementById('historyScript'),
   spellHistoryList: document.getElementById('spellHistoryList'),
   promptInput: document.getElementById('promptInput'),
   spellApiTarget: document.getElementById('spellApiTarget'),
@@ -112,7 +104,6 @@ const dom = {
   estimateBtn: document.getElementById('estimateBtn'),
   applyBtn: document.getElementById('applyBtn'),
   cancelSpellQueueBtn: document.getElementById('cancelSpellQueueBtn'),
-  resetSandboxBtn: document.getElementById('resetSandboxBtn'),
   toast: document.getElementById('toast'),
 };
 
@@ -177,16 +168,10 @@ const promptProcessor = new PromptProcessor(
   },
   {
     onQueueUpdated: (queueSize) => {
-      dom.queueStatus.textContent = `Queue: ${queueSize}`;
       syncApplyButtonState();
     },
-    onStatus: (message) => {
-      dom.applyStatus.textContent = message;
-    },
-    onHistoryUpdated: () => {
-      const script = promptProcessor.getReplayScript();
-      dom.historyScript.textContent = script.length > 0 ? script : BASELINE_HISTORY_TEXT;
-    },
+    onStatus: () => {},
+    onHistoryUpdated: () => {},
   },
   {
     generationMode: import.meta.env.VITE_GENERATION_MODE ?? 'openai-api-key',
@@ -232,9 +217,6 @@ bootstrap();
 
 async function bootstrap() {
   refreshHud();
-  dom.loopStatus.textContent = 'Loop: Running';
-  dom.loopStatus.classList.remove('status-danger');
-  dom.loopStatus.classList.add('status-ok');
 
   try {
     await loadEnemyModels(scene);
@@ -553,7 +535,6 @@ function setupPromptUi() {
     lastEstimate = null;
     dom.preview.hidden = true;
     syncApplyButtonState();
-    dom.applyStatus.textContent = 'Sending prompt to spell API backend...';
     void castFromPrompt(raw);
   }
 
@@ -574,15 +555,10 @@ function setupPromptUi() {
 
     estimateInFlight = true;
     dom.estimateBtn.disabled = true;
-    dom.applyStatus.textContent = 'Estimating with fast model...';
-
     try {
       lastEstimate = await estimatePrompt(raw);
       renderEstimate(lastEstimate);
-      dom.applyStatus.textContent = `Estimated ${lastEstimate.id} with fast model`;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'unknown error';
-      dom.applyStatus.textContent = `Estimate failed: ${message}`;
       lastEstimate = null;
       dom.preview.hidden = true;
     } finally {
@@ -603,14 +579,12 @@ function setupPromptUi() {
     }
 
     if (!canSpendGold(lastEstimate.estimatedGoldCost)) {
-      dom.applyStatus.textContent = 'Apply blocked: not enough Gold at queue time';
       syncApplyButtonState();
       return;
     }
 
     const preset = dom.modelPreset.value;
     promptProcessor.enqueue(lastEstimate, preset);
-    dom.applyStatus.textContent = `Queued ${lastEstimate.id} with preset ${preset}`;
     dom.promptInput.value = '';
     lastEstimate = null;
     dom.preview.hidden = true;
@@ -619,10 +593,6 @@ function setupPromptUi() {
 
   dom.cancelSpellQueueBtn.addEventListener('click', () => {
     cancelQueuedSpells();
-  });
-
-  dom.resetSandboxBtn?.addEventListener('click', () => {
-    void resetSandboxToTemplate('manual');
   });
 
   function forceApplyFromPromptInput() {
@@ -637,7 +607,6 @@ function setupPromptUi() {
     }
 
     if (GAME.gameOver) {
-      dom.applyStatus.textContent = 'Prompt apply disabled (game over)';
       return;
     }
 
@@ -653,7 +622,6 @@ function setupPromptUi() {
     };
 
     promptProcessor.enqueue(envelope, preset);
-    dom.applyStatus.textContent = `Force-queued ${envelope.id} with preset ${preset} (no estimate)`;
     dom.promptInput.value = '';
     lastEstimate = null;
     dom.preview.hidden = true;
@@ -685,9 +653,6 @@ function setupPromptUi() {
     }
   });
 
-  dom.queueStatus.textContent = `Queue: ${promptProcessor.getQueueSize()}`;
-  dom.applyStatus.textContent = 'No prompt applied yet';
-  dom.historyScript.textContent = BASELINE_HISTORY_TEXT;
   renderSpellHistory();
   syncSpellQueueUi();
 }
@@ -768,10 +733,6 @@ function getReservedGold() {
 async function castFromPrompt(rawPrompt) {
   const historyId = appendSpellHistory(rawPrompt);
   spellQueue.push({ rawPrompt, historyId });
-  const queuedAhead = spellQueue.length - 1;
-  if (queuedAhead > 0) {
-    dom.applyStatus.textContent = `Spell queued (${queuedAhead} ahead)`;
-  }
   syncSpellQueueUi();
   void processSpellQueue();
 }
@@ -860,8 +821,6 @@ async function castQueuedSpell(rawPrompt, historyId) {
   } catch (error) {
     console.warn('[main] spell generation failed', error);
     const message = error instanceof Error ? error.message : String(error);
-    const endpoint = getSpellGenerateEndpoint();
-    dom.applyStatus.textContent = `Spell API request failed (${endpoint}): ${message}`;
     setToast('Spell engine unavailable');
     updateSpellHistory(historyId, 'failed', `Spell API failed: ${message}`);
   }
@@ -878,7 +837,6 @@ function cancelQueuedSpells() {
     updateSpellHistory(queued.historyId, 'failed', 'Cancelled from queue');
   }
 
-  dom.applyStatus.textContent = `Cancelled ${pending.length} queued spell${pending.length === 1 ? '' : 's'}`;
   setToast('Queued spells cancelled');
   syncSpellQueueUi();
 }
@@ -889,10 +847,6 @@ async function resetSandboxToTemplate(reason) {
   }
 
   resetInFlight = true;
-  if (dom.resetSandboxBtn) {
-    dom.resetSandboxBtn.disabled = true;
-  }
-  dom.applyStatus.textContent = 'Resetting sandbox to template baseline...';
 
   try {
     promptProcessor.clearQueuedJobs();
@@ -903,12 +857,7 @@ async function resetSandboxToTemplate(reason) {
     setToast(`Reset sandbox (${reason}), reloading baseline...`);
     window.location.reload();
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown error';
-    dom.applyStatus.textContent = `Sandbox reset failed: ${message}`;
     resetInFlight = false;
-    if (dom.resetSandboxBtn) {
-      dom.resetSandboxBtn.disabled = false;
-    }
     syncApplyButtonState();
   }
 }
@@ -1624,8 +1573,10 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
     kind: archetype,
     mesh: projectileMesh,
     target,
-    speed: clamp(Number(spell?.numbers?.speed || 30), 8, 44),
-    damage: clamp(Number(spell?.numbers?.damage || 24), 8, 150),
+    speed: clamp(Number(spell?.numbers?.speed || 30), 22, 44),
+    damage: spell?.targeting?.singleTarget
+      ? clamp(Number(spell?.numbers?.damage || 120), 80, 250)
+      : clamp(Number(spell?.numbers?.damage || 70), 50, 200),
     splash: clamp(
       Number(
         spell?.targeting?.singleTarget
@@ -1650,7 +1601,7 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
 function castZoneFromConfig(spell) {
   const duration = clamp(Number(spell?.numbers?.durationSec || 4), 1, 10);
   const radius = clamp(Number(spell?.numbers?.radius || 2.2), 1, 8);
-  const damage = clamp(Number(spell?.numbers?.damage || 12), 1, 120);
+  const damage = clamp(Number(spell?.numbers?.damage || 40), 20, 150);
   const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.8), 0.2, 2);
   const effects = Array.isArray(spell?.effects) ? spell.effects : [];
   const element = spell?.element || 'arcane';
@@ -1907,7 +1858,7 @@ function castChainFromConfig(spell) {
     return false;
   }
 
-  const damage = clamp(Number(spell?.numbers?.damage || 34), 8, 120);
+  const damage = clamp(Number(spell?.numbers?.damage || 80), 50, 200);
   const chainCount = clamp(Math.floor(Number(spell?.numbers?.chainCount || 3)), 2, 7);
   const effects = Array.isArray(spell?.effects) ? spell.effects : [];
   const sorted = [...liveEnemies].sort((a, b) => b.mesh.position.z - a.mesh.position.z).slice(0, chainCount);
@@ -1960,7 +1911,7 @@ function castStrikeFromConfig(spell) {
     return false;
   }
 
-  const damage = clamp(Number(spell?.numbers?.damage || 60), 8, 150);
+  const damage = clamp(Number(spell?.numbers?.damage || 100), 60, 250);
   const radius = clamp(Number(spell?.numbers?.radius || 3.0), 1.5, 6);
   const effects = Array.isArray(spell?.effects) ? spell.effects : [];
   const element = spell?.element || 'fire';
@@ -2053,7 +2004,7 @@ function castBeamFromConfig(spell) {
     return false;
   }
 
-  const damage = clamp(Number(spell?.numbers?.damage || 18), 4, 80);
+  const damage = clamp(Number(spell?.numbers?.damage || 45), 25, 120);
   const duration = clamp(Number(spell?.numbers?.durationSec || 2.5), 1, 6);
   const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.3), 0.15, 0.8);
   const beamLength = clamp(Number(spell?.numbers?.length || 35), 10, 80);
@@ -2939,10 +2890,6 @@ function updateToast(dt) {
 
 function gameOver() {
   GAME.gameOver = true;
-  dom.loopStatus.textContent = 'Loop: Halted';
-  dom.loopStatus.classList.remove('status-ok');
-  dom.loopStatus.classList.add('status-danger');
-  dom.applyStatus.textContent = 'Prompt apply disabled (game over)';
   setToast(`Base destroyed. Final score ${GAME.score}. Press R to restart.`);
 }
 
