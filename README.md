@@ -43,6 +43,14 @@ npm run dev
 
 Then open the local Vite URL (usually `http://localhost:5173`).
 
+Create a `.env` file in the project root:
+
+```bash
+OPENAI_API_KEY=sk-...
+```
+
+Prompt estimation now always runs through the fast model (`gpt-5.3-codex`, reasoning `low`) with structured JSON output.
+
 ## Tune quickly
 
 Main constants and logic are in `src/main.js`:

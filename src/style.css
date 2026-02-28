@@ -1,6 +1,12 @@
 :root {
   color-scheme: dark;
   font-family: "Trebuchet MS", "Verdana", sans-serif;
+  --panel: rgba(7, 15, 26, 0.84);
+  --panel-border: rgba(160, 201, 255, 0.25);
+  --muted: #9eb7d5;
+  --ok: #5dd39e;
+  --danger: #ef476f;
+  --accent: #e9c46a;
 }
 
 * {
@@ -27,11 +33,11 @@ canvas {
   z-index: 20;
   padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid rgba(160, 201, 255, 0.25);
-  background: rgba(5, 13, 22, 0.7);
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
   color: #dbe9f8;
   font-size: 14px;
-  min-width: 220px;
+  min-width: 260px;
   backdrop-filter: blur(5px);
 }
 
@@ -41,14 +47,14 @@ canvas {
 
 #hint {
   margin-top: 8px;
-  color: #9eb7d5;
+  color: var(--muted);
   font-size: 12px;
 }
 
 #commandWrap {
   position: fixed;
   left: 50%;
-  bottom: 24px;
+  bottom: 92px;
   transform: translateX(-50%);
   z-index: 30;
   width: min(640px, calc(100vw - 24px));
@@ -77,7 +83,7 @@ canvas {
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(7, 15, 26, 0.85);
+  background: var(--panel);
   color: #eef6ff;
   opacity: 0;
   transform: translateY(-8px);
@@ -91,14 +97,177 @@ canvas {
   transform: translateY(0);
 }
 
+#statusStrip {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  font-size: 13px;
+  color: #dbe9f8;
+  z-index: 22;
+  max-width: min(58vw, 860px);
+  backdrop-filter: blur(5px);
+}
+
+.status-ok {
+  color: var(--ok);
+}
+
+.status-danger {
+  color: var(--danger);
+}
+
+#preview,
+#historyPanel {
+  position: fixed;
+  bottom: 90px;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: #dbe9f8;
+  padding: 10px 12px;
+  z-index: 26;
+  backdrop-filter: blur(5px);
+}
+
+#preview {
+  right: 14px;
+}
+
+#historyPanel {
+  left: 14px;
+}
+
+#preview h3,
+#historyPanel h3 {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#previewBody,
+#historyScript {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+#historyScript {
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+}
+
+#promptBar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: 1fr 170px auto auto;
+  gap: 8px;
+  align-items: center;
+  z-index: 35;
+  padding: 10px 12px;
+  border-top: 1px solid var(--panel-border);
+  background: color-mix(in srgb, #091322 82%, #000);
+  backdrop-filter: blur(5px);
+}
+
+#promptInput {
+  width: 100%;
+  min-height: 42px;
+  max-height: 96px;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid #355f8d;
+  background: rgba(8, 17, 30, 0.92);
+  color: #eaf4ff;
+  padding: 10px 12px;
+  outline: none;
+  font-size: 14px;
+}
+
+#modelPreset,
+#estimateBtn,
+#applyBtn {
+  min-height: 42px;
+  border-radius: 10px;
+  border: 1px solid #355f8d;
+  background: rgba(8, 17, 30, 0.92);
+  color: #eaf4ff;
+  font-size: 14px;
+  padding: 0 12px;
+}
+
+#estimateBtn,
+#applyBtn {
+  border: none;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+#estimateBtn {
+  background: #3f72af;
+  color: #fff;
+}
+
+#applyBtn {
+  background: var(--accent);
+  color: #1a1d22;
+}
+
+#applyBtn:disabled {
+  background: #4f5460;
+  color: #9aa0ad;
+  cursor: not-allowed;
+}
+
 @media (max-width: 840px) {
   #hud {
     font-size: 12px;
-    min-width: 180px;
+    min-width: 200px;
   }
 
   #commandInput {
     font-size: 15px;
     padding: 11px 12px;
+  }
+
+  #statusStrip {
+    top: auto;
+    right: auto;
+    left: 14px;
+    bottom: 228px;
+    flex-wrap: wrap;
+    max-width: calc(100vw - 28px);
+  }
+
+  #preview {
+    right: 14px;
+    bottom: 270px;
+  }
+
+  #historyPanel {
+    left: 14px;
+    bottom: 420px;
+  }
+
+  #promptBar {
+    grid-template-columns: 1fr;
+  }
+
+  #estimateBtn,
+  #applyBtn {
+    width: 100%;
   }
 }

@@ -458,6 +458,12 @@ function updateSpriteEnemy(enemyVisual, dt) {
     sway = Math.sin(anim.t * 6.1) * 0.05;
     scaleY = 0.98 + Math.sin(anim.t * 8.5) * 0.04;
     scaleX = 1.01 - Math.sin(anim.t * 8.5) * 0.03;
+  } else if (enemyVisual.state === 'attack') {
+    // Punchy, short cycle that reads as striking the wall in sprite mode.
+    bob = Math.sin(anim.t * 12.5) * 0.07;
+    sway = Math.sin(anim.t * 15.0) * 0.12;
+    scaleY = 1.0 + Math.max(0, Math.sin(anim.t * 12.5)) * 0.08;
+    scaleX = 1.0 - Math.max(0, Math.sin(anim.t * 12.5)) * 0.05;
   } else if (enemyVisual.state === 'hit') {
     anim.hitLeft = Math.max(0, anim.hitLeft - dt);
     bob = 0.04;
@@ -506,7 +512,7 @@ export function setEnemyAnim(enemyVisual, state) {
     enemyVisual._anim.dieT = 0;
   }
 
-  if (state === 'run' || state === 'idle') {
+  if (state === 'run' || state === 'idle' || state === 'attack') {
     enemyVisual.root.material.opacity = 1;
     enemyVisual.root.material.color.setRGB(1, 1, 1);
   }
