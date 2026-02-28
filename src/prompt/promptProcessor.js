@@ -1,7 +1,9 @@
+import { OPENAI_MODEL } from '../../config.js';
+
 export const MODEL_PRESET_MAP = {
-  fast: 'gpt-5.3-codex',
-  medium: 'gpt-5.3-codex',
-  high: 'gpt-5.3-codex',
+  fast: OPENAI_MODEL,
+  medium: OPENAI_MODEL,
+  high: OPENAI_MODEL,
 };
 export const REASONING_EFFORT_PRESET_MAP = {
   fast: 'low',
@@ -87,6 +89,11 @@ function summarizeArtifacts(artifact, applyRuntime = null) {
     lines.push(`assets=${Math.floor(generatedAssets)}`);
   }
   return lines.slice(0, MAX_ARTIFACT_LINES);
+}
+
+function requestedMechanicCount(artifact) {
+  const mechanics = artifact?.sandboxPatch?.mechanics;
+  return Array.isArray(mechanics) ? mechanics.length : 0;
 }
 
 export class PromptProcessor {
@@ -202,6 +209,14 @@ export class PromptProcessor {
               templateVersion: result.applyDetails?.templateVersion ?? null,
               artifact,
             })) ?? null;
+
+          const requestedCount = requestedMechanicCount(artifact);
+          const activatedCount = Number(applyRuntime?.activatedMechanics ?? 0);
+          if (requestedCount > 0 && (!Number.isFinite(activatedCount) || activatedCount < 1)) {
+            throw new Error(
+              `No mechanics activated (${requestedCount} requested, ${Number.isFinite(activatedCount) ? activatedCount : 0} activated)`
+            );
+          }
         } catch (error) {
           const applyError = error instanceof Error ? error.message : 'unknown sandbox apply error';
           this.deps.refundReservedGold(reservationId);

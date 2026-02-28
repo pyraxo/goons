@@ -90,7 +90,11 @@ describe('PromptProcessor', () => {
         commitReservedGold: () => true,
         refundReservedGold: () => true,
       },
-      {},
+      {
+        onArtifactApplied: async () => ({
+          activatedMechanics: 1,
+        }),
+      },
       {
         executePrompt: async () => ({
           templateVersion: 'sandbox-v1',
@@ -120,6 +124,58 @@ describe('PromptProcessor', () => {
     expect(replay).toContain('mechanic: Wall of Fire');
     expect(replay).toContain('Deals 8 DPS for 4s');
     expect(replay).toContain('template=sandbox-v1');
+  });
+
+  it('refunds and fails apply when mechanics were requested but none activated', async () => {
+    let committed = 0;
+    let refunded = 0;
+
+    const processor = new PromptProcessor(
+      {
+        reserveGold: () => 'res_1',
+        commitReservedGold: () => {
+          committed += 1;
+          return true;
+        },
+        refundReservedGold: () => {
+          refunded += 1;
+          return true;
+        },
+      },
+      {
+        onArtifactApplied: async () => ({
+          activatedMechanics: 0,
+        }),
+      },
+      {
+        executePrompt: async () => ({
+          templateVersion: 'sandbox-v1',
+          artifact: {
+            sandboxPatch: {
+              resetToBaselineFirst: false,
+              ui: [],
+              units: [],
+              actions: [],
+              mechanics: [
+                {
+                  id: 'bad_mech',
+                  name: 'Bad Mech',
+                  description: 'Will not activate',
+                  hooks: [],
+                },
+              ],
+            },
+          },
+        }),
+      }
+    );
+
+    processor.enqueue(makeEnvelope('apply but no active mechanics'), 'fast');
+    await processor.waitForIdle();
+
+    expect(committed).toBe(0);
+    expect(refunded).toBe(1);
+    expect(processor.getHistory()).toHaveLength(0);
   });
 
   it('can clear queued jobs and replay history for sandbox reset', async () => {

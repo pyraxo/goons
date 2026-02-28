@@ -3,10 +3,65 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Prompt Defense 3D</title>
+    <title>God of Goons</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
+    <!-- ═══ ONBOARDING OVERLAY ═══ -->
+    <div id="onboarding">
+      <div class="ob-ember-field" aria-hidden="true"></div>
+
+      <div class="ob-content">
+        <div class="ob-title-group">
+          <img src="/splash.jpg" alt="God of Goons — Spells · LLMs · Battle" class="ob-splash" />
+          <p class="ob-tagline">Speak your spells into existence. Command the arcane. Hold the line.</p>
+        </div>
+
+        <div class="ob-cards">
+          <div class="ob-card" style="--i:0">
+            <div class="ob-card-icon">
+              <svg viewBox="0 0 40 40" fill="none"><path d="M20 6l3 8h8l-6.5 5 2.5 8L20 22l-7 5 2.5-8L9 14h8z" fill="currentColor"/></svg>
+            </div>
+            <div class="ob-card-body">
+              <h3>MOVE</h3>
+              <p><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to reposition your commander across the lanes</p>
+            </div>
+          </div>
+
+          <div class="ob-card" style="--i:1">
+            <div class="ob-card-icon">
+              <svg viewBox="0 0 40 40" fill="none"><circle cx="20" cy="20" r="10" stroke="currentColor" stroke-width="2.5"/><path d="M20 12v16M12 20h16" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+            </div>
+            <div class="ob-card-body">
+              <h3>CAST</h3>
+              <p>Press <kbd>Enter</kbd> for quick spells, or <strong>type any prompt</strong> below to conjure custom AI-generated magic</p>
+            </div>
+          </div>
+
+          <div class="ob-card" style="--i:2">
+            <div class="ob-card-icon">
+              <svg viewBox="0 0 40 40" fill="none"><rect x="8" y="16" width="24" height="16" rx="2" stroke="currentColor" stroke-width="2.5"/><path d="M14 16V10a6 6 0 0112 0v6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+            </div>
+            <div class="ob-card-body">
+              <h3>SURVIVE</h3>
+              <p>Endless waves of goons march toward your base. Every wave hits harder. How long can you hold?</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="ob-prompt-hint">
+          <span class="ob-prompt-label">EXAMPLE PROMPT</span>
+          <span class="ob-prompt-text">"fireball" or "icebolt"</span>
+        </div>
+
+        <button id="obStartBtn" type="button">
+          <span class="ob-btn-text">ENTER THE FRAY</span>
+          <span class="ob-btn-glow"></span>
+        </button>
+        <div class="ob-skip">or press any key</div>
+      </div>
+    </div>
+
     <div id="hud">
       <div class="stat">Base HP: <span id="baseHp"></span></div>
       <div class="stat">Mana: <span id="mana"></span></div>
@@ -29,20 +84,18 @@
       <input id="commandInput" type="text" autocomplete="off" placeholder="Type a spell..." />
     </div>
 
-    <div id="preview" hidden>
-      <h3>Prompt Preview</h3>
-      <div id="previewBody"></div>
-    </div>
-
     <div id="historyPanel">
       <h3>Replay Script</h3>
       <pre id="historyScript">No applied prompts yet.</pre>
+      <h3 class="history-subtitle">Spell History</h3>
+      <ul id="spellHistoryList" aria-live="polite">
+        <li class="spell-history-empty">No spell casts yet.</li>
+      </ul>
     </div>
 
     <div id="promptBar">
       <textarea id="promptInput" placeholder="Type prompt: e.g. summon 3 shield bearers with taunt"></textarea>
-      <button id="estimateBtn" type="button">Estimate</button>
-      <button id="applyBtn" type="button" disabled>Apply</button>
+      <button id="cancelSpellQueueBtn" type="button" disabled>Cancel Queue</button>
     </div>
 
     <div id="toast"></div>

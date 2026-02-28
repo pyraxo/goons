@@ -1,7 +1,7 @@
 # God of Goons (Three.js)
 
 God of Goons is a top-down 3D horde-defense prototype with a prompt-driven sandbox loop.
-You still have classic spell casting, but prompts now target broader game layers:
+You still have classic spell casting, while prompts can target broader game layers:
 
 - `ui` (widgets/panels/status affordances)
 - `mechanics` (rules/hooks/effects)
@@ -20,6 +20,7 @@ You still have classic spell casting, but prompts now target broader game layers
   - auto-disable on errors/budget violations
 - Added agentic apply workflow (`src/runtime/agenticApplyWorkflow.js`) that validates mechanics, activates runtime hooks, persists sandbox state, and triggers asset generation.
 - Added GLB asset generation endpoint (`/api/assets/generate-glb`) that writes generated placeholders to `public/models/generated/*`.
+- Added spellcraft tool-calling endpoint (`/api/spells/generate`) that drafts spell configs through function-calling (`craft_spell`) with deterministic fallback when model output is invalid/incomplete.
 - Enemy visuals now use an animated FBX goblin pipeline (Mixamo walk) with texture-based materials.
 
 ## Gameplay baseline
@@ -27,7 +28,7 @@ You still have classic spell casting, but prompts now target broader game layers
 - Move commander with `WASD`
 - Open command bar with `Enter`
 - Survive lane-based enemy waves and protect base HP
-- Cast baseline spells (`fireball`, `wall`, later `frost`, `bolt`)
+- Cast baseline spells (`fireball`, `wall`, `frost`, `bolt`)
 - Manage mana, cooldowns, and Gold for prompt-applied sandbox changes
 
 ## Prompt system (current shape)
@@ -42,19 +43,60 @@ You still have classic spell casting, but prompts now target broader game layers
 4. Prompt processor updates queue state, replay history, and apply status, then calls the sandbox apply workflow.
 5. Sandbox apply workflow compiles/activates mechanics, persists applied branches, and optionally writes generated GLB assets.
 
+## Dynamic spell engine
+
+- Frontend sends combat context to `POST /api/spells/generate`
+- Backend performs template alias matching (`server/spell-templates.json`) for terse prompts like `fireball`
+- If a template matches, backend appends `templateContext` (`matchedKey`, `matchedAlias`, `expandedIntent`) to the single existing model call
+- Matching order is deterministic: exact alias match first, then whole-word/phrase match in longer prompts (longest alias wins, then template order)
+- Backend validates and normalizes generated spell configs
+- If LLM output is invalid/unavailable, deterministic fallback generates a safe spell
+- Frontend casts and shows `LLM: archetype/effects` or `Fallback cast`
+- API response `meta` now includes `templateMatch` and `expandedPromptPreview`
+
 ## Run locally
 
 ```bash
 npm install
-npm run dev
+npm run dev:backend
+npm run dev:frontend
 ```
 
 Open [http://localhost:5173](http://localhost:5173).
+
+You can also run both in one shell:
+
+```bash
+npm run dev:all
+```
 
 Create `.env`:
 
 ```bash
 OPENAI_API_KEY=sk-...
+# optional
+OPENAI_MODEL=gpt-5-nano
+SPELL_API_TIMEOUT_MS=10000
+SPELL_BACKEND_PORT=8787
+SPELL_BACKEND_HOST=127.0.0.1
+SPELL_API_DEBUG_FULL_PAYLOAD=1
+SPELL_REASONING_EFFORT=minimal
+SPELL_API_MAX_OUTPUT_TOKENS=420
+SPELL_API_RETRY_MAX_OUTPUT_TOKENS=700
+```
+
+## Backend debugability
+
+Backend API runs as a separate process (`server/index.js`) and logs cast requests:
+
+- `[spell-api] llm_cast`: tool call worked and produced a validated spell
+- `[spell-api] fallback`: fallback was used; inspect `fallbackReason` and `warnings`
+- Request lifecycle logs include `requestId` for traceability
+
+Health check:
+
+```bash
+curl http://localhost:8787/healthz
 ```
 
 ## Key files
@@ -63,6 +105,8 @@ OPENAI_API_KEY=sk-...
 - `src/game/config.js`: gameplay constants and initial state
 - `src/game/economy.js`: Gold reservation/commit/refund store
 - `src/game/engineSystems.js`: combat, waves, spawning, spell casting, runtime command application
+- `server/spell-engine.js`: spell schema, balancing, normalization, deterministic fallback logic
+- `server/spell-api.js`: tool-calling orchestration and telemetry for `/api/spells/generate`
 - `src/game/world.js`: map + commander construction helpers
 - `src/prompt/costEstimator.js`: prompt type/cost/risk estimation client
 - `src/prompt/promptProcessor.js`: queueing, retries, apply history, Gold reservation flow
@@ -82,10 +126,12 @@ OPENAI_API_KEY=sk-...
 ## Enemy visual setup (FBX)
 
 Current defaults use:
+
 - `public/models/enemies/goblin-walk/Walking.fbx`
 - `public/models/enemies/goblin-walk/textures/*`
 
 `public/models/enemies/manifest.json` controls per-kind settings:
+
 - `kind`: `melee`, `ranged`, `tank`
 - `path`: animated FBX path
 - `scale`: per-kind scale
@@ -93,6 +139,7 @@ Current defaults use:
 - `castsShadow`: shadow toggle
 
 Runtime animation states expected by game logic:
+
 - `idle`
 - `run`
 - `attack`

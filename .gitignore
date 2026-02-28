@@ -24,3 +24,6 @@ Thumbs.db
 
 # AI assistant
 CLAUDE.md
+
+# Generated sandbox assets
+public/models/generated/*.glb

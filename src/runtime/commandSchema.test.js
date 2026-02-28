@@ -10,6 +10,14 @@ describe('validateRuntimeCommand', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('accepts valid action cast command', () => {
+    const result = validateRuntimeCommand({
+      type: 'actions.castSpell',
+      payload: { spellName: 'fireball' },
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it('rejects invalid command type', () => {
     const result = validateRuntimeCommand({
       type: 'engine.eval',

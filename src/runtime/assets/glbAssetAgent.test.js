@@ -37,7 +37,7 @@ describe('glbAssetAgent', () => {
             sourceType: 'mechanic',
             sourceId: 'wall_of_fire',
             generatedAt: '2026-02-28T00:00:00.000Z',
-            model: 'gpt-5.3-codex',
+            model: 'gpt-5-nano',
           },
         ],
       }),

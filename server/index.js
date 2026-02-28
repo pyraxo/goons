@@ -1,0 +1,142 @@
+import '../env.js';
+import { createServer } from 'node:http';
+import { inspect } from 'node:util';
+import { getSpellApiMetrics, handleSpellGenerate } from './spell-api.js';
+import { OPENAI_MODEL } from '../config.js';
+
+const PORT = Number(process.env.SPELL_BACKEND_PORT || 8787);
+const HOST = process.env.SPELL_BACKEND_HOST || '127.0.0.1';
+
+const server = createServer(async (req, res) => {
+  const start = Date.now();
+  applyCorsHeaders(res);
+
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/healthz') {
+    json(res, 200, {
+      ok: true,
+      service: 'spell-backend',
+      hasApiKey: Boolean(process.env.OPENAI_API_KEY),
+      model: OPENAI_MODEL,
+      telemetry: getSpellApiMetrics(),
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/spells/generate') {
+    const requestId = makeRequestId();
+    try {
+      const rawBody = await readBody(req);
+      const parsed = rawBody ? JSON.parse(rawBody) : {};
+      logStructured('log', '[spell-backend] cast_request', {
+        requestId,
+        body: parsed,
+      });
+      const result = await handleSpellGenerate(parsed, { requestId });
+      logStructured('log', '[spell-backend] cast_response', {
+        requestId,
+        status: result?.status ?? 500,
+        body: result?.payload ?? null,
+      });
+      logRequest(result, parsed, Date.now() - start, requestId);
+      json(res, result.status, result.payload);
+      return;
+    } catch (error) {
+      const detail = String(error?.message || error);
+      logStructured('error', '[spell-api] request_failed', { requestId, detail });
+      json(res, 500, {
+        error: 'internal spell api error',
+        detail,
+      });
+      return;
+    }
+  }
+
+  json(res, 404, { error: 'not_found' });
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`[spell-backend] listening on http://${HOST}:${PORT}`);
+  logStructured('log', '[spell-backend] env', {
+    hasApiKey: Boolean(process.env.OPENAI_API_KEY),
+    model: OPENAI_MODEL,
+    timeoutMs: Number(process.env.SPELL_API_TIMEOUT_MS || 10000),
+  });
+});
+
+function json(res, statusCode, payload) {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'application/json');
+  applyCorsHeaders(res);
+  res.end(JSON.stringify(payload));
+}
+
+function applyCorsHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+function readBody(req) {
+  return new Promise((resolveBody, rejectBody) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > 512_000) {
+        rejectBody(new Error('request_body_too_large'));
+      }
+    });
+    req.on('end', () => resolveBody(data));
+    req.on('error', rejectBody);
+  });
+}
+
+function logRequest(result, parsed, elapsedMs, requestId) {
+  const meta = result?.payload?.meta || {};
+  const payloadSpell = result?.payload?.spell || {};
+  const source = result?.payload?.source || 'unknown';
+  const prompt = typeof parsed?.prompt === 'string' ? parsed.prompt.slice(0, 60) : '';
+  const warnings = Array.isArray(meta.warnings) ? meta.warnings : [];
+
+  const line = {
+    source,
+    archetype: payloadSpell.archetype,
+    effects: payloadSpell.effects,
+    powerScore: meta.powerScore,
+    cost: payloadSpell.cost || null,
+    latencyMs: meta.latencyMs,
+    elapsedMs,
+    fallbackReason: meta.fallbackReason || null,
+    warnings,
+    prompt,
+  };
+
+  if (source === 'fallback') {
+    logStructured('warn', '[spell-api] fallback', { requestId, ...line });
+  } else {
+    logStructured('log', '[spell-api] llm_cast', { requestId, ...line });
+  }
+}
+
+function logStructured(level, label, payload) {
+  const msg = inspect(payload, {
+    depth: null,
+    maxArrayLength: null,
+    maxStringLength: null,
+    compact: false,
+    breakLength: 120,
+    sorted: true,
+  });
+  console[level](`${label} ${msg}`);
+}
+
+function makeRequestId() {
+  const stamp = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${stamp}-${rand}`;
+}

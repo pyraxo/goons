@@ -24,6 +24,26 @@ describe('PrimitiveRegistry', () => {
     ]);
   });
 
+  it('emits action cast command from actions.cast_spell primitive', () => {
+    const registry = createDefaultPrimitiveRegistry();
+    const commands = registry.executeInvocation(
+      {
+        primitiveId: 'actions.cast_spell',
+        args: { spellName: 'fireball' },
+      },
+      { eventName: 'onKillCombo' }
+    );
+
+    expect(commands).toEqual([
+      {
+        type: 'actions.castSpell',
+        payload: {
+          spellName: 'fireball',
+        },
+      },
+    ]);
+  });
+
   it('rejects invocation with unknown primitive', () => {
     const registry = createDefaultPrimitiveRegistry();
     const result = registry.validateInvocation(
@@ -76,5 +96,24 @@ describe('PrimitiveRegistry', () => {
         },
       },
     ]);
+  });
+
+  it('fails when dynamic context references are unresolved', () => {
+    const registry = createDefaultPrimitiveRegistry();
+    expect(() =>
+      registry.executeInvocation(
+        {
+          primitiveId: 'combat.apply_dot',
+          args: {
+            targetId: '$enemy.id',
+            dps: 5,
+            durationSeconds: 3,
+          },
+        },
+        {
+          eventName: 'onEnemyDeath',
+        }
+      )
+    ).toThrow('unresolved refs');
   });
 });
