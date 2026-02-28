@@ -18,15 +18,15 @@ Stores should support:
 ## Implemented Stores
 
 - In-memory:
-  - `/src/runtime/persistence/sandboxStateStore.js`
+  - `/server/runtime/persistence/sandboxStateStore.js`
   - Use for local runtime and fastest iteration.
 
 - File-backed:
-  - `/src/runtime/persistence/fileSandboxStateStore.js`
+  - `/server/runtime/persistence/fileSandboxStateStore.js`
   - Persists JSON snapshots to disk (Node runtime).
 
 - Redis-backed:
-  - `/src/runtime/persistence/redisSandboxStateStore.js`
+  - `/server/runtime/persistence/redisSandboxStateStore.js`
   - Persists snapshots to a Redis key for shared/dev-server state.
 
 ## Baseline State

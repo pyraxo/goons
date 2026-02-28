@@ -14,11 +14,11 @@ You still have classic spell casting, while prompts can target broader game laye
 - Prompt artifacts are structured JSON (template `sandbox-v1`) instead of only ad-hoc spell mapping.
 - Replay history now records prompt type mix, artifact counts, and mechanic summaries.
 - Added one-click `Reset Sandbox` to clear generated layers, queue/history, and restore baseline state.
-- Runtime safety work landed for bounded mechanic execution (`src/runtime/mechanicRuntime.js`) with:
+- Runtime safety work landed for bounded mechanic execution (`server/runtime/mechanicRuntime.js`) with:
   - per-tick command budget
   - per-mechanic runtime budget
   - auto-disable on errors/budget violations
-- Added agentic apply workflow (`src/runtime/agenticApplyWorkflow.js`) that validates mechanics, activates runtime hooks, persists sandbox state, and triggers asset generation.
+- Added agentic apply workflow (`server/runtime/agenticApplyWorkflow.js`) that validates mechanics, activates runtime hooks, persists sandbox state, and triggers asset generation.
 - Added GLB asset generation endpoint (`/api/assets/generate-glb`) that writes generated placeholders to `public/models/generated/*`.
 - Added spellcraft tool-calling endpoint (`/api/spells/generate`) that drafts spell configs through function-calling (`craft_spell`) with deterministic fallback when model output is invalid/incomplete.
 - Enemy visuals now use an animated FBX goblin pipeline (Mixamo walk) with texture-based materials.
@@ -64,11 +64,9 @@ npm run dev:frontend
 
 Open [http://localhost:5173](http://localhost:5173).
 
-You can also run both in one shell:
-
-```bash
-npm run dev:all
-```
+`npm run dev` now starts both:
+- frontend (`vite`) on `:5173`
+- standalone API server (`server/index.js`) on `:8787` (proxied as `/api` from Vite)
 
 Create `.env`:
 
@@ -111,13 +109,13 @@ curl http://localhost:8787/healthz
 - `src/prompt/costEstimator.js`: prompt type/cost/risk estimation client
 - `src/prompt/promptProcessor.js`: queueing, retries, apply history, Gold reservation flow
 - `src/prompt/templateDrafts.js`: artifact schema + system/user prompt templates
-- `src/prompt/artifactContract.js`: strict artifact output parser/validator (Zod)
-- `src/prompt/estimateContract.js`: strict estimate output parser/validator (Zod)
-- `src/runtime/commandSchema.js`: allowed runtime command contracts
-- `src/runtime/mechanicRuntime.js`: bounded, telemetry-aware mechanic execution
-- `src/runtime/agenticApplyWorkflow.js`: compile/apply/persist orchestration for sandbox artifacts
-- `src/runtime/assets/glbAssetAgent.js`: derives GLB jobs and calls generation endpoint
-- `src/runtime/persistence/sandboxStateStore.js`: in-memory baseline + persistence interface
+- `server/prompt/artifactContract.js`: strict artifact output parser/validator (Zod)
+- `server/prompt/estimateContract.js`: strict estimate output parser/validator (Zod)
+- `server/runtime/commandSchema.js`: allowed runtime command contracts
+- `server/runtime/mechanicRuntime.js`: bounded, telemetry-aware mechanic execution
+- `server/runtime/agenticApplyWorkflow.js`: compile/apply/persist orchestration for sandbox artifacts
+- `server/runtime/assets/glbAssetAgent.js`: derives GLB jobs and calls generation endpoint
+- `server/runtime/persistence/sandboxStateStore.js`: in-memory baseline + persistence interface
 - `src/enemy-models.js`: enemy visual loading/animation integration
 - `docs/architecture/dynamic-sandbox-runtime-plan.md`: forward plan for sandbox hardening
 - `docs/architecture/primitives-and-mechanics-contract.md`: mechanic primitive contract + execution model

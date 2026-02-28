@@ -19,7 +19,6 @@ const baseRequest = {
   prompt: 'sand blast',
   wave: 2,
   mana: 120,
-  unlocks: ['fireball', 'wall'],
   nearbyEnemies: [
     { lane: 1, kind: 'melee', hp: 58, z: 30 },
     { lane: 2, kind: 'ranged', hp: 40, z: -10 },

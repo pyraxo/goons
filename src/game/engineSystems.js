@@ -45,9 +45,12 @@ function levenshtein(a, b) {
 
 export function createEngineSystems({ scene, game, commander, laneX, rng, onToast, onHudChanged }) {
   const enemies = [];
+  const units = [];
   const projectiles = [];
   const walls = [];
   const zones = [];
+  const actionVisuals = [];
+  const spellCooldowns = new Map();
   const runtimeGoldMultipliers = new Map();
   const activeDots = new Map();
   let runtimeHooks = null;
@@ -672,7 +675,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
   function castSpellByName(spellName, options = {}) {
     const {
       enforceCosts = true,
-      allowLocked = false,
       showToast = true,
     } = options;
 
@@ -684,9 +686,17 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       return false;
     }
 
-    if (!allowLocked && !game.unlocks.includes(spellName)) {
+    if (enforceCosts && game.globalCooldown > 0) {
       if (showToast) {
-        onToast(`Spell not unlocked: ${spellName}`);
+        onToast('Global cooldown active');
+      }
+      return false;
+    }
+
+    const spellCd = spellCooldowns.get(spellName) || 0;
+    if (enforceCosts && spellCd > 0) {
+      if (showToast) {
+        onToast(`${spellName} cooldown ${spellCd.toFixed(1)}s`);
       }
       return false;
     }
@@ -709,6 +719,16 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     if (showToast) {
       onToast(`Cast ${spellName}: ${spell.description}`);
     }
+    actionVisuals.push({
+      id: `action_vfx_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'ring',
+      x: commander.mesh.position.x,
+      z: commander.mesh.position.z - 4,
+      radius: 1.5,
+      duration: 0.65,
+      baseDuration: 0.65,
+      color: 0xff9f59,
+    });
     onHudChanged?.();
     return true;
   }
@@ -722,7 +742,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
 
     return castSpellByName(spellName, {
       enforceCosts: true,
-      allowLocked: false,
       showToast: true,
     });
   }
@@ -732,7 +751,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       prompt,
       wave: game.wave,
       mana: game.mana,
-      unlocks: game.unlocks,
       nearbyEnemies: enemies
         .filter((enemy) => !enemy.dead)
         .slice(0, 24)
@@ -802,7 +820,8 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       burningFor: 0,
       burnDps: 0,
       atCastleWall: false,
-      wallAttackAccumulatorSeconds: 0,
+      blocked: false,
+      attackAccumulatorSeconds: 0,
       dead: false,
       deathTimer: 0,
       hitTimer: 0,
@@ -829,18 +848,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
         hp: enemy.hp,
       },
     });
-  }
-
-  function tryUnlockSpell() {
-    if (game.wave === 3 && !game.unlocks.includes('frost')) {
-      game.unlocks.push('frost');
-      onToast('Unlocked spell: frost');
-    }
-
-    if (game.wave === 6 && !game.unlocks.includes('bolt')) {
-      game.unlocks.push('bolt');
-      onToast('Unlocked spell: bolt');
-    }
   }
 
   function updateCommander(dt, input) {
@@ -880,7 +887,6 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
         wave: game.wave,
       });
       onToast(`Wave ${game.wave} begins`);
-      tryUnlockSpell();
       onHudChanged?.();
     }
   }
@@ -987,7 +993,7 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       if (enemy.hitTimer > 0) {
         enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
         if (enemy.hitTimer === 0) {
-          setEnemyAnim(enemy.visual, enemy.atCastleWall ? 'attack' : 'run');
+          setEnemyAnim(enemy.visual, (enemy.atCastleWall || enemy.blocked) ? 'attack' : 'run');
         }
       }
 
@@ -995,24 +1001,37 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       enemy.visual.playbackScale = moveScale;
 
       let blocked = false;
+      let blockTarget = null;
+
       for (const wall of walls) {
         if (wall.lane !== enemy.lane) continue;
         const closeEnough = Math.abs(enemy.mesh.position.z - wall.mesh.position.z) < 1.65;
         if (closeEnough && enemy.mesh.position.z < wall.mesh.position.z + 0.6) {
           blocked = true;
-          wall.hp -= enemy.damage * dt;
+          blockTarget = wall;
           break;
         }
       }
 
       if (!blocked) {
-        enemy.mesh.position.z += enemy.speed * moveScale * dt;
-      } else {
-        enemy.atCastleWall = false;
-        enemy.wallAttackAccumulatorSeconds = 0;
-        if (enemy.hitTimer === 0) {
-          setEnemyAnim(enemy.visual, 'run');
+        for (const unit of units) {
+          if (unit.hp <= 0) continue;
+          if (unit.lane !== enemy.lane) continue;
+          const closeEnough = Math.abs(enemy.mesh.position.z - unit.z) < 1.65;
+          if (closeEnough && enemy.mesh.position.z < unit.z + 0.6) {
+            blocked = true;
+            blockTarget = unit;
+            break;
+          }
         }
+      }
+
+      if (!blocked) {
+        enemy.mesh.position.z += enemy.speed * moveScale * dt;
+        enemy.blocked = false;
+      } else {
+        enemy.blocked = true;
+        enemy.atCastleWall = false;
       }
 
       if (!blocked && enemy.mesh.position.z >= castleWallFrontZ - 0.35) {
@@ -1020,21 +1039,27 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
         enemy.mesh.position.z = castleWallFrontZ - 0.35;
       } else if (!blocked) {
         enemy.atCastleWall = false;
-        enemy.wallAttackAccumulatorSeconds = 0;
-        if (enemy.hitTimer === 0) {
-          setEnemyAnim(enemy.visual, 'run');
-        }
       }
 
-      if (enemy.atCastleWall) {
+      // Attack whatever is blocking: wall, unit, or castle
+      if (blocked || enemy.atCastleWall) {
         if (enemy.hitTimer === 0) {
           setEnemyAnim(enemy.visual, 'attack');
         }
 
-        enemy.wallAttackAccumulatorSeconds += dt * moveScale;
-        while (enemy.wallAttackAccumulatorSeconds >= GOON_ATTACK_INTERVAL_SECONDS && game.baseHp > 0) {
-          enemy.wallAttackAccumulatorSeconds -= GOON_ATTACK_INTERVAL_SECONDS;
-          game.baseHp = Math.max(0, game.baseHp - GOON_ATTACK_DAMAGE);
+        enemy.attackAccumulatorSeconds += dt * moveScale;
+        while (enemy.attackAccumulatorSeconds >= GOON_ATTACK_INTERVAL_SECONDS) {
+          enemy.attackAccumulatorSeconds -= GOON_ATTACK_INTERVAL_SECONDS;
+          if (enemy.atCastleWall && game.baseHp > 0) {
+            game.baseHp = Math.max(0, game.baseHp - GOON_ATTACK_DAMAGE);
+          } else if (blockTarget) {
+            blockTarget.hp -= enemy.damage;
+          }
+        }
+      } else {
+        enemy.attackAccumulatorSeconds = 0;
+        if (enemy.hitTimer === 0) {
+          setEnemyAnim(enemy.visual, 'run');
         }
       }
 
@@ -1209,8 +1234,28 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       }
       castSpellByName(spellName, {
         enforceCosts: false,
-        allowLocked: true,
         showToast: false,
+      });
+      return;
+    }
+
+    if (command.type === 'units.spawn') {
+      const unitKind = String(command.payload?.unitKind ?? '').trim();
+      if (!unitKind) {
+        return;
+      }
+      const lane = Number.isInteger(command.payload?.lane)
+        ? clamp(command.payload.lane, 0, LANE_COUNT - 1)
+        : lanePressure()[0].lane;
+      units.push({
+        id: `unit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        kind: unitKind,
+        lane,
+        x: laneX(lane),
+        z: commander.mesh.position.z - 4.2,
+        hp: 100,
+        maxHp: 100,
+        attackCooldown: 0,
       });
       return;
     }
@@ -1288,6 +1333,8 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       }
     }
     zones.length = 0;
+    units.length = 0;
+    actionVisuals.length = 0;
 
     activeDots.clear();
     runtimeGoldMultipliers.clear();
@@ -1302,6 +1349,36 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     runtimeHooks = nextHooks ?? null;
   }
 
+  function updateUnits(dt) {
+    for (let i = units.length - 1; i >= 0; i -= 1) {
+      const unit = units[i];
+      if (unit.hp <= 0) {
+        units.splice(i, 1);
+        continue;
+      }
+      unit.attackCooldown = Math.max(0, Number(unit.attackCooldown || 0) - dt);
+      const target = enemies.find((enemy) => !enemy.dead && enemy.lane === unit.lane);
+      if (!target || unit.attackCooldown > 0) {
+        continue;
+      }
+      damageEnemy(target, 7);
+      unit.attackCooldown = 0.75;
+      spawnZap(target.mesh.position, 'arcane');
+    }
+  }
+
+  function updateActionVisuals(dt) {
+    for (let i = actionVisuals.length - 1; i >= 0; i -= 1) {
+      const visual = actionVisuals[i];
+      visual.duration -= dt;
+      const progress = 1 - clamp(visual.duration / Math.max(0.001, visual.baseDuration), 0, 1);
+      visual.radius = 1.5 + progress * 5;
+      if (visual.duration <= 0) {
+        actionVisuals.splice(i, 1);
+      }
+    }
+  }
+
   return {
     castFromPrompt,
     castFromGeneratedSpell,
@@ -1311,14 +1388,18 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     updateResources,
     updateWalls,
     updateZones,
+    updateUnits,
+    updateActionVisuals,
     updateEnemies,
     updateProjectiles,
     applyRuntimeCommand,
     resetDynamicState,
     setRuntimeHooks,
     enemies,
+    units,
     walls,
     zones,
     projectiles,
+    actionVisuals,
   };
 }

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { PROMPT_TYPES, RISK_LEVELS } from '../types/prompt.js';
+import { PROMPT_TYPES, RISK_LEVELS } from '../../src/types/prompt.js';
 
 const PromptTypeSchema = z.enum(PROMPT_TYPES);
 const RiskLevelSchema = z.enum(RISK_LEVELS);

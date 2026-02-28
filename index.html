@@ -14,8 +14,6 @@
       <div class="stat">Score: <span id="score"></span></div>
       <div class="stat">Gold: <span id="gold"></span></div>
       <div class="stat">Reserved: <span id="reservedGold"></span></div>
-      <div class="stat">Unlocked: <span id="unlocks"></span></div>
-      <div id="hint">WASD move commander. Enter opens command bar.</div>
     </div>
 
     <div id="statusStrip">
@@ -44,19 +42,8 @@
     </div>
 
     <div id="promptBar">
-      <textarea id="promptInput" placeholder="Type prompt: e.g. summon 3 shield bearers with taunt"></textarea>
-      <select id="spellApiTarget" aria-label="Spell API target">
-        <option value="vite">Spell API: Vite proxy</option>
-        <option value="backend">Spell API: Backend direct</option>
-      </select>
-      <select id="modelPreset" aria-label="Model preset">
-        <option value="fast">Preset: Fast</option>
-        <option value="medium">Preset: Medium</option>
-        <option value="high">Preset: High</option>
-      </select>
-      <button id="estimateBtn" type="button">Estimate</button>
-      <button id="applyBtn" type="button" disabled>Apply</button>
-      <button id="cancelSpellQueueBtn" type="button" disabled>Cancel Queue</button>
+      <textarea id="promptInput" placeholder="Type prompt and press Enter to submit"></textarea>
+      <button id="submitPromptBtn" type="button">Submit</button>
     </div>
 
     <div id="toast"></div>

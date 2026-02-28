@@ -213,8 +213,10 @@ export class PromptProcessor {
           const requestedCount = requestedMechanicCount(artifact);
           const activatedCount = Number(applyRuntime?.activatedMechanics ?? 0);
           if (requestedCount > 0 && (!Number.isFinite(activatedCount) || activatedCount < 1)) {
+            const skipped = Array.isArray(applyRuntime?.skippedMechanics) ? applyRuntime.skippedMechanics : [];
+            const reasons = skipped.map((s) => `${s.id}: ${s.reason}`).join('; ');
             throw new Error(
-              `No mechanics activated (${requestedCount} requested, ${Number.isFinite(activatedCount) ? activatedCount : 0} activated)`
+              `No mechanics activated (${requestedCount} requested, ${Number.isFinite(activatedCount) ? activatedCount : 0} activated)${reasons ? `. Reasons: ${reasons}` : ''}`
             );
           }
         } catch (error) {
@@ -352,9 +354,9 @@ export class PromptProcessor {
       const errorText = await response.text();
       const shortError = errorText.slice(0, 320);
       if (response.status === 401 || response.status === 403) {
-        throw new NonRetriablePromptError(`OpenAI auth/permission error (${response.status}): ${shortError}`);
+        throw new NonRetriablePromptError(`Auth/permission error (${response.status}): ${shortError}`);
       }
-      throw new Error(`OpenAI generation failed (${response.status}): ${shortError}`);
+      throw new Error(`Generation failed (${response.status}): ${shortError}`);
     }
 
     const payload = await response.json();

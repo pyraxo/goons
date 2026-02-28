@@ -1,8 +1,9 @@
 import { createInitialGameState, BASE_Z, CASTLE_WALL_FRONT_Z, COMMANDER_MIN_Z, COMMANDER_MAX_Z, GOON_ATTACK_DAMAGE, GOON_ATTACK_INTERVAL_SECONDS, KILL_GOLD_REWARD, LANE_COUNT, LANE_SPACING, START_Z } from '../src/game/config.js';
-import { MechanicRuntime } from '../src/runtime/mechanicRuntime.js';
-import { InMemorySandboxStateStore } from '../src/runtime/persistence/sandboxStateStore.js';
-import { createDefaultPrimitiveRegistry } from '../src/runtime/primitives/primitiveRegistry.js';
-import { runAgenticApplyWorkflow } from '../src/runtime/agenticApplyWorkflow.js';
+import { runAgenticApplyWorkflow } from './runtime/agenticApplyWorkflow.js';
+import { deriveGlbAssetJobs } from './runtime/assets/glbAssetAgent.js';
+import { MechanicRuntime } from './runtime/mechanicRuntime.js';
+import { InMemorySandboxStateStore } from './runtime/persistence/sandboxStateStore.js';
+import { createDefaultPrimitiveRegistry } from './runtime/primitives/primitiveRegistry.js';
 import { handleSpellGenerate } from './spell-api.js';
 
 const TICK_HZ = 30;
@@ -10,6 +11,7 @@ const TICK_DT = 1 / TICK_HZ;
 const MAX_SNAPSHOT_ENEMIES = 256;
 const MAX_SNAPSHOT_PROJECTILES = 128;
 const MAX_WALLS = 12;
+const SERVER_GLB_ASSET_ENDPOINT = process.env.GLB_ASSET_ENDPOINT || 'http://127.0.0.1:5173/api/assets/generate-glb';
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -47,6 +49,82 @@ function normalizePrompt(prompt) {
     .replace(/[^a-z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizeToken(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function colorFromText(value, fallback = '#8ab4ff') {
+  const text = String(value ?? '').trim();
+  if (!text) {
+    return fallback;
+  }
+  if (/^#[0-9a-f]{6}$/i.test(text)) {
+    return text.toLowerCase();
+  }
+  const aliases = {
+    fire: '#ff8840',
+    ice: '#98d8ff',
+    storm: '#a8eeff',
+    earth: '#96ac75',
+    arcane: '#c59dff',
+    poison: '#68be72',
+  };
+  return aliases[text.toLowerCase()] || fallback;
+}
+
+function normalizeGeneratedAssets(payloadAssets) {
+  if (!Array.isArray(payloadAssets)) {
+    return [];
+  }
+
+  return payloadAssets
+    .map((asset) => ({
+      id: String(asset?.id ?? asset?.assetId ?? '').trim(),
+      name: String(asset?.name ?? '').trim(),
+      kind: 'glb',
+      path: String(asset?.path ?? '').trim(),
+      sourceType: String(asset?.sourceType ?? '').trim(),
+      sourceId: String(asset?.sourceId ?? '').trim(),
+      generatedAt: String(asset?.generatedAt ?? '').trim(),
+      model: String(asset?.model ?? '').trim(),
+    }))
+    .filter((asset) => asset.id && asset.path);
+}
+
+async function generateServerGlbAssetsForArtifact({ envelope, artifact }) {
+  const jobs = deriveGlbAssetJobs(artifact);
+  if (jobs.length === 0) {
+    return { jobs: [], assets: [] };
+  }
+
+  const response = await fetch(SERVER_GLB_ASSET_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      promptId: envelope?.id ?? '',
+      prompt: envelope?.rawPrompt ?? '',
+      jobs,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`GLB generation failed (${response.status}): ${errorText.slice(0, 320)}`);
+  }
+
+  const payload = await response.json();
+  return {
+    jobs,
+    assets: normalizeGeneratedAssets(payload?.assets),
+  };
 }
 
 function createReservationStore(game) {
@@ -110,20 +188,25 @@ export class ServerGameSession {
     };
     this.input = { w: false, a: false, s: false, d: false };
     this.enemies = [];
+    this.units = [];
     this.walls = [];
     this.projectiles = [];
     this.zones = [];
+    this.actionVisuals = [];
     this.runtimeGoldMultipliers = new Map();
     this.activeDots = new Map();
+    this.spellCooldowns = new Map();
     this.lastTickAt = Date.now();
     this.spawnTimer = 0;
     this.waveTimer = 0;
     this.comboCount = 0;
     this.comboTimer = 0;
     this.enemyIdCounter = 1;
+    this.unitIdCounter = 1;
     this.wallIdCounter = 1;
     this.projectileIdCounter = 1;
     this.zoneIdCounter = 1;
+    this.actionVisualIdCounter = 1;
     this.lastToast = null;
     this.snapshotVersion = 0;
 
@@ -131,6 +214,11 @@ export class ServerGameSession {
     this.primitiveRegistry = createDefaultPrimitiveRegistry();
     this.sandboxStateStore = new InMemorySandboxStateStore();
     this.goldReservations = createReservationStore(this.game);
+    this.generatedUnitDefs = new Map();
+    this.generatedActionDefs = new Map();
+    this.generatedActionState = new Map();
+    this.generatedAssets = [];
+    this.mountedWidgets = new Map();
 
     this.spells = {
       fireball: {
@@ -189,6 +277,125 @@ export class ServerGameSession {
     };
   }
 
+  syncGeneratedCatalogs(artifact, generatedAssets) {
+    const patch = artifact?.sandboxPatch ?? {};
+    const units = Array.isArray(patch.units) ? patch.units : [];
+    const actions = Array.isArray(patch.actions) ? patch.actions : [];
+
+    this.generatedUnitDefs.clear();
+    this.generatedActionDefs.clear();
+    this.generatedActionState.clear();
+    this.generatedAssets = Array.isArray(generatedAssets) ? generatedAssets : [];
+
+    for (const unit of units) {
+      const key = normalizeToken(unit?.id || unit?.name);
+      if (!key) continue;
+      this.generatedUnitDefs.set(key, unit);
+    }
+
+    for (const action of actions) {
+      const key = normalizeToken(action?.id || action?.name);
+      if (!key) continue;
+      this.generatedActionDefs.set(key, action);
+      this.generatedActionState.set(key, {
+        cooldownLeft: 0,
+      });
+    }
+  }
+
+  resolveAssetPath(sourceType, sourceId) {
+    const typeToken = normalizeToken(sourceType);
+    const idToken = normalizeToken(sourceId);
+    if (!typeToken || !idToken) {
+      return '';
+    }
+    const found = this.generatedAssets.find(
+      (asset) => normalizeToken(asset?.sourceType) === typeToken && normalizeToken(asset?.sourceId) === idToken
+    );
+    return String(found?.path ?? '');
+  }
+
+  findGeneratedUnit(unitKind) {
+    const token = normalizeToken(unitKind);
+    if (!token) {
+      return null;
+    }
+    return this.generatedUnitDefs.get(token) ?? null;
+  }
+
+  findGeneratedAction(actionName) {
+    const token = normalizeToken(actionName);
+    if (!token) {
+      return null;
+    }
+    return this.generatedActionDefs.get(token) ?? null;
+  }
+
+  resolveGeneratedAction(actionName) {
+    const token = normalizeToken(actionName);
+    if (!token) {
+      return null;
+    }
+    if (this.generatedActionDefs.has(token)) {
+      return this.generatedActionDefs.get(token);
+    }
+
+    for (const [key, action] of this.generatedActionDefs.entries()) {
+      if (key.includes(token) || token.includes(key)) {
+        return action;
+      }
+      const actionNameToken = normalizeToken(action?.name);
+      if (actionNameToken && (actionNameToken.includes(token) || token.includes(actionNameToken))) {
+        return action;
+      }
+    }
+
+    return null;
+  }
+
+  inferElementFromText(...parts) {
+    const text = parts
+      .map((value) => String(value ?? '').toLowerCase())
+      .join(' ')
+      .trim();
+    if (text.includes('fire') || text.includes('burn') || text.includes('ember')) return 'fire';
+    if (text.includes('ice') || text.includes('frost') || text.includes('freeze')) return 'ice';
+    if (text.includes('storm') || text.includes('lightning') || text.includes('thunder')) return 'storm';
+    if (text.includes('earth') || text.includes('stone')) return 'earth';
+    return 'arcane';
+  }
+
+  parseActionIntervalSeconds(trigger) {
+    const normalized = String(trigger ?? '').toLowerCase();
+    const match = normalized.match(/every\s+(\d+(\.\d+)?)\s*(s|sec|secs|second|seconds)\b/);
+    if (match) {
+      const seconds = Number(match[1]);
+      if (Number.isFinite(seconds) && seconds > 0) {
+        return clamp(seconds, 0.1, 20);
+      }
+    }
+    if (normalized.includes('every tick') || normalized.includes('continuous')) return 0.6;
+    if (normalized.includes('on tick')) return 0.8;
+    if (normalized.includes('wave')) return 8;
+    if (normalized.includes('spawn')) return 1.2;
+    return 1.5;
+  }
+
+  actionRunsOnEvent(action, eventName) {
+    const trigger = String(action?.trigger ?? '').toLowerCase();
+    if (eventName === 'onWaveStart') {
+      return trigger.includes('wave');
+    }
+    if (eventName === 'onEnemySpawn') {
+      return trigger.includes('spawn');
+    }
+    if (eventName === 'onTick') {
+      if (trigger.includes('wave') || trigger.includes('spawn')) return false;
+      return true;
+    }
+    return false;
+  }
+
   reset(reason = 'manual') {
     this.mechanicRuntime.clear();
     void this.sandboxStateStore.reset();
@@ -197,19 +404,29 @@ export class ServerGameSession {
     this.commander.z = BASE_Z - 5;
     this.input = { w: false, a: false, s: false, d: false };
     this.enemies = [];
+    this.units = [];
     this.walls = [];
     this.projectiles = [];
     this.zones = [];
+    this.actionVisuals = [];
     this.runtimeGoldMultipliers.clear();
     this.activeDots.clear();
+    this.spellCooldowns.clear();
     this.spawnTimer = 0;
     this.waveTimer = 0;
     this.comboCount = 0;
     this.comboTimer = 0;
     this.enemyIdCounter = 1;
+    this.unitIdCounter = 1;
     this.wallIdCounter = 1;
     this.projectileIdCounter = 1;
     this.zoneIdCounter = 1;
+    this.actionVisualIdCounter = 1;
+    this.generatedUnitDefs.clear();
+    this.generatedActionDefs.clear();
+    this.generatedActionState.clear();
+    this.generatedAssets = [];
+    this.mountedWidgets.clear();
     this.goldReservations.clearReservations();
     this.nowToast(`Sandbox reset (${reason})`);
     this.snapshotVersion += 1;
@@ -252,15 +469,21 @@ export class ServerGameSession {
   }
 
   castSpellByName(spellName, options = {}) {
-    const { enforceCosts = true, allowLocked = false, showToast = true } = options;
+    const { enforceCosts = true, showToast = true } = options;
     const spell = this.spells[spellName];
     if (!spell) {
       if (showToast) this.nowToast(`No spell match for "${spellName}"`);
       return false;
     }
 
-    if (!allowLocked && !this.game.unlocks.includes(spellName)) {
-      if (showToast) this.nowToast(`Spell not unlocked: ${spellName}`);
+    if (enforceCosts && this.game.globalCooldown > 0) {
+      if (showToast) this.nowToast('Global cooldown active');
+      return false;
+    }
+
+    const cooldown = this.spellCooldowns.get(spellName) || 0;
+    if (enforceCosts && cooldown > 0) {
+      if (showToast) this.nowToast(`${spellName} cooldown ${cooldown.toFixed(1)}s`);
       return false;
     }
 
@@ -435,7 +658,8 @@ export class ServerGameSession {
       aimHeight: 1.2,
       frozenFor: 0,
       atCastleWall: false,
-      wallAttackAccumulatorSeconds: 0,
+      blocked: false,
+      attackAccumulatorSeconds: 0,
       dead: false,
       deathTimer: 0,
       hitTimer: 0,
@@ -469,17 +693,200 @@ export class ServerGameSession {
       },
       (command) => this.applyRuntimeCommand(command)
     );
+    this.runGeneratedActions('onEnemySpawn');
   }
 
-  tryUnlockSpell() {
-    if (this.game.wave === 3 && !this.game.unlocks.includes('frost')) {
-      this.game.unlocks.push('frost');
-      this.nowToast('Unlocked spell: frost');
+  spawnGeneratedUnit(unitKind, laneCandidate) {
+    const definition = this.findGeneratedUnit(unitKind);
+    const fallbackRole = String(unitKind ?? '').trim() || 'support';
+    const role = String(definition?.role ?? fallbackRole).trim() || 'support';
+    const behavior = String(definition?.behavior ?? 'hold_position').trim() || 'hold_position';
+    const fallbackShape = String(definition?.visual?.fallbackShape ?? 'capsule');
+    const tint = colorFromText(definition?.visual?.tint, '#8ab4ff');
+    const scale = clamp(Number(definition?.visual?.scale ?? 1), 0.2, 4);
+    const sourceId = String(definition?.id ?? unitKind ?? `unit_${this.unitIdCounter}`);
+    const lane = Number.isInteger(laneCandidate)
+      ? clamp(laneCandidate, 0, LANE_COUNT - 1)
+      : clamp(this.lanePressure()[0]?.lane ?? 2, 0, LANE_COUNT - 1);
+
+    this.units.push({
+      id: `unit_${this.unitIdCounter++}`,
+      kind: normalizeToken(unitKind) || normalizeToken(sourceId) || 'generated_unit',
+      sourceId,
+      lane,
+      role,
+      behavior,
+      x: laneX(lane),
+      z: CASTLE_WALL_FRONT_Z - 5 - Math.random() * 4,
+      hp: 100,
+      maxHp: 100,
+      fallbackShape,
+      tint,
+      scale,
+      assetPath: this.resolveAssetPath('unit', sourceId),
+      attackCooldown: 0,
+    });
+  }
+
+  spawnActionVisual(actionName) {
+    const action = this.findGeneratedAction(actionName);
+    const sourceId = String(action?.id ?? actionName ?? '');
+    const shape = String(action?.visual?.vfxShape ?? 'ring');
+    const durationMs = clamp(Number(action?.visual?.durationMs ?? 650), 100, 12_000);
+
+    this.actionVisuals.push({
+      id: `action_vfx_${this.actionVisualIdCounter++}`,
+      actionName: String(actionName ?? '').trim().toLowerCase(),
+      sourceId,
+      kind: shape === 'wave' ? 'wave' : shape === 'orb' ? 'orb' : 'ring',
+      x: this.commander.x,
+      z: this.commander.z - 4.5,
+      radius: 1.5,
+      duration: durationMs / 1000,
+      baseDuration: durationMs / 1000,
+      color: colorFromText(action?.visual?.color, '#ff9f59'),
+      assetPath: this.resolveAssetPath('action', sourceId),
+    });
+  }
+
+  executeGeneratedAction(action, eventName = 'onTick') {
+    if (!action) return false;
+
+    const actionId = normalizeToken(action.id || action.name);
+    const sourceId = String(action.id ?? action.name ?? actionId ?? '');
+    const actionText = `${action.name || ''} ${action.effect || ''}`.toLowerCase();
+    const element = this.inferElementFromText(action.name, action.effect);
+    const lane = this.lanePressure()[0]?.lane ?? 2;
+    const focusEnemy = this.enemies
+      .filter((enemy) => !enemy.dead)
+      .sort((a, b) => b.z - a.z)[0];
+    const z = focusEnemy ? focusEnemy.z : Math.max(BASE_Z - 28, Math.min(BASE_Z - 9, this.commander.z - 8));
+
+    if (actionText.includes('wall')) {
+      if (this.walls.length < MAX_WALLS) {
+        this.walls.push({
+          id: `wall_${this.wallIdCounter++}`,
+          lane,
+          x: laneX(lane),
+          z,
+          hp: 130,
+          maxHp: 130,
+          duration: 6,
+        });
+      }
+      this.zones.push({
+        id: `zone_${this.zoneIdCounter++}`,
+        kind: 'generated_wall_aura',
+        laneMin: lane,
+        laneMax: lane,
+        z,
+        radius: 2.4,
+        duration: 6,
+        timer: 0,
+        tickRate: 0.5,
+        damage: actionText.includes('fire') || actionText.includes('burn') ? 18 : 12,
+        effects: actionText.includes('freeze') ? ['freeze'] : ['burn'],
+      });
+    } else if (actionText.includes('storm') || actionText.includes('lightning') || actionText.includes('chain')) {
+      const targets = this.enemies
+        .filter((enemy) => !enemy.dead)
+        .sort((a, b) => b.z - a.z)
+        .slice(0, 4);
+      for (const enemy of targets) {
+        this.projectiles.push({
+          id: `proj_${this.projectileIdCounter++}`,
+          kind: 'zap',
+          x: enemy.x,
+          y: 2.5,
+          z: enemy.z,
+          life: 0.2,
+        });
+        this.damageEnemy(enemy, 20);
+      }
+    } else {
+      this.zones.push({
+        id: `zone_${this.zoneIdCounter++}`,
+        kind: 'generated_action_zone',
+        laneMin: Math.max(0, lane - 1),
+        laneMax: Math.min(LANE_COUNT - 1, lane + 1),
+        z,
+        radius: actionText.includes('burst') || actionText.includes('nova') ? 4 : 3,
+        duration: 2.4,
+        timer: 0,
+        tickRate: 0.4,
+        damage: 14,
+        effects: actionText.includes('freeze') ? ['freeze'] : actionText.includes('burn') ? ['burn'] : [],
+      });
     }
 
-    if (this.game.wave === 6 && !this.game.unlocks.includes('bolt')) {
-      this.game.unlocks.push('bolt');
-      this.nowToast('Unlocked spell: bolt');
+    this.actionVisuals.push({
+      id: `action_vfx_${this.actionVisualIdCounter++}`,
+      actionName: String(action.name ?? actionId ?? '').trim().toLowerCase(),
+      sourceId,
+      kind: actionText.includes('wave') || actionText.includes('wall') ? 'wave' : actionText.includes('orb') ? 'orb' : 'ring',
+      x: laneX(lane),
+      z,
+      radius: 1.5,
+      duration: 1.2,
+      baseDuration: 1.2,
+      color: colorFromText(action.visual?.color, colorFromText(element, '#ff9f59')),
+      assetPath: this.resolveAssetPath('action', sourceId),
+    });
+
+    const state = this.generatedActionState.get(actionId) ?? { cooldownLeft: 0 };
+    state.cooldownLeft = this.parseActionIntervalSeconds(action.trigger);
+    this.generatedActionState.set(actionId, state);
+
+    return true;
+  }
+
+  updateGeneratedActionStates(dt) {
+    for (const state of this.generatedActionState.values()) {
+      state.cooldownLeft = Math.max(0, Number(state.cooldownLeft || 0) - dt);
+    }
+  }
+
+  runGeneratedActions(eventName = 'onTick') {
+    for (const [key, action] of this.generatedActionDefs.entries()) {
+      if (!this.actionRunsOnEvent(action, eventName)) {
+        continue;
+      }
+      const state = this.generatedActionState.get(key) ?? { cooldownLeft: 0 };
+      if (state.cooldownLeft > 0) {
+        continue;
+      }
+      this.executeGeneratedAction(action, eventName);
+    }
+  }
+
+  seedGeneratedStageEntities() {
+    for (const action of this.generatedActionDefs.values()) {
+      const trigger = String(action?.trigger ?? '').toLowerCase();
+      if (trigger.includes('wave') || trigger.includes('spawn')) {
+        continue;
+      }
+      this.executeGeneratedAction(action, 'onTick');
+    }
+
+    for (const unit of this.generatedUnitDefs.values()) {
+      if (this.units.some((entry) => normalizeToken(entry.sourceId) === normalizeToken(unit.id))) {
+        continue;
+      }
+      this.spawnGeneratedUnit(unit.id || unit.name, null);
+    }
+  }
+
+  mountWidgetsFromArtifact(artifact) {
+    const uiItems = Array.isArray(artifact?.sandboxPatch?.ui) ? artifact.sandboxPatch.ui : [];
+    for (const item of uiItems) {
+      const id = String(item?.id ?? '').trim();
+      if (!id) continue;
+      this.mountedWidgets.set(id, {
+        id,
+        title: String(item?.title ?? ''),
+        content: String(item?.content ?? ''),
+        position: String(item?.position ?? 'top-right'),
+      });
     }
   }
 
@@ -520,7 +927,6 @@ export class ServerGameSession {
       this.waveTimer = 0;
       this.game.wave += 1;
       this.nowToast(`Wave ${this.game.wave} begins`);
-      this.tryUnlockSpell();
 
       this.mechanicRuntime.dispatchEvent(
         'onWaveStart',
@@ -530,6 +936,7 @@ export class ServerGameSession {
         },
         (command) => this.applyRuntimeCommand(command)
       );
+      this.runGeneratedActions('onWaveStart');
     }
   }
 
@@ -625,21 +1032,37 @@ export class ServerGameSession {
       const moveScale = enemy.frozenFor > 0 ? 0.15 : 1;
 
       let blocked = false;
+      let blockTarget = null;
+
       for (const wall of this.walls) {
         if (wall.lane !== enemy.lane) continue;
         const closeEnough = Math.abs(enemy.z - wall.z) < 1.65;
         if (closeEnough && enemy.z < wall.z + 0.6) {
           blocked = true;
-          wall.hp -= enemy.damage * dt;
+          blockTarget = wall;
           break;
         }
       }
 
       if (!blocked) {
+        for (const unit of this.units) {
+          if (unit.hp <= 0) continue;
+          if (unit.lane !== enemy.lane) continue;
+          const closeEnough = Math.abs(enemy.z - unit.z) < 1.65;
+          if (closeEnough && enemy.z < unit.z + 0.6) {
+            blocked = true;
+            blockTarget = unit;
+            break;
+          }
+        }
+      }
+
+      if (!blocked) {
         enemy.z += enemy.speed * moveScale * dt;
+        enemy.blocked = false;
       } else {
+        enemy.blocked = true;
         enemy.atCastleWall = false;
-        enemy.wallAttackAccumulatorSeconds = 0;
       }
 
       if (!blocked && enemy.z >= CASTLE_WALL_FRONT_Z - 0.35) {
@@ -647,18 +1070,24 @@ export class ServerGameSession {
         enemy.z = CASTLE_WALL_FRONT_Z - 0.35;
       } else if (!blocked) {
         enemy.atCastleWall = false;
-        enemy.wallAttackAccumulatorSeconds = 0;
       }
 
-      if (enemy.atCastleWall) {
-        enemy.wallAttackAccumulatorSeconds += dt * moveScale;
-        while (enemy.wallAttackAccumulatorSeconds >= GOON_ATTACK_INTERVAL_SECONDS && this.game.baseHp > 0) {
-          enemy.wallAttackAccumulatorSeconds -= GOON_ATTACK_INTERVAL_SECONDS;
-          this.game.baseHp = Math.max(0, this.game.baseHp - GOON_ATTACK_DAMAGE);
+      // Attack whatever is blocking: wall, unit, or castle
+      if (blocked || enemy.atCastleWall) {
+        enemy.attackAccumulatorSeconds += dt * moveScale;
+        while (enemy.attackAccumulatorSeconds >= GOON_ATTACK_INTERVAL_SECONDS) {
+          enemy.attackAccumulatorSeconds -= GOON_ATTACK_INTERVAL_SECONDS;
+          if (enemy.atCastleWall && this.game.baseHp > 0) {
+            this.game.baseHp = Math.max(0, this.game.baseHp - GOON_ATTACK_DAMAGE);
+          } else if (blockTarget) {
+            blockTarget.hp -= enemy.damage;
+          }
         }
+      } else {
+        enemy.attackAccumulatorSeconds = 0;
       }
 
-      enemy.anim = enemy.hitTimer > 0 ? 'hit' : enemy.atCastleWall ? 'attack' : 'run';
+      enemy.anim = enemy.hitTimer > 0 ? 'hit' : (enemy.atCastleWall || enemy.blocked) ? 'attack' : 'run';
 
       if (enemy.hp <= 0) {
         this.destroyEnemy(i, true);
@@ -672,6 +1101,45 @@ export class ServerGameSession {
       wall.duration -= dt;
       if (wall.duration <= 0 || wall.hp <= 0) {
         this.walls.splice(i, 1);
+      }
+    }
+  }
+
+  updateUnits(dt) {
+    for (let i = this.units.length - 1; i >= 0; i -= 1) {
+      const unit = this.units[i];
+      if (unit.hp <= 0) {
+        this.units.splice(i, 1);
+        continue;
+      }
+      unit.attackCooldown = Math.max(0, Number(unit.attackCooldown || 0) - dt);
+      const target = this.enemies.find((enemy) => !enemy.dead && enemy.lane === unit.lane);
+      if (!target || unit.attackCooldown > 0) {
+        continue;
+      }
+      this.damageEnemy(target, 7);
+      unit.attackCooldown = 0.75;
+      this.projectiles.push({
+        id: `proj_${this.projectileIdCounter++}`,
+        kind: 'zap',
+        x: unit.x,
+        y: 2.1,
+        z: unit.z,
+        targetX: target.x,
+        targetZ: target.z,
+        life: 0.45,
+      });
+    }
+  }
+
+  updateActionVisuals(dt) {
+    for (let i = this.actionVisuals.length - 1; i >= 0; i -= 1) {
+      const visual = this.actionVisuals[i];
+      visual.duration -= dt;
+      const progress = 1 - clamp(visual.duration / Math.max(0.001, visual.baseDuration), 0, 1);
+      visual.radius = 1.5 + progress * (visual.kind === 'wave' ? 8.5 : visual.kind === 'orb' ? 2.2 : 4.8);
+      if (visual.duration <= 0) {
+        this.actionVisuals.splice(i, 1);
       }
     }
   }
@@ -805,7 +1273,17 @@ export class ServerGameSession {
         Math.max(0.1, sourceDot.dps * 0.8),
         Math.max(0.1, sourceDot.remainingSeconds * 0.8)
       );
-      if (ok) applied += 1;
+      if (ok) {
+        applied += 1;
+        this.projectiles.push({
+          id: `proj_${this.projectileIdCounter++}`,
+          kind: 'zap',
+          x: (source.x + target.enemy.x) * 0.5,
+          y: 2.2,
+          z: (source.z + target.enemy.z) * 0.5,
+          life: 0.3,
+        });
+      }
     }
 
     return applied;
@@ -815,13 +1293,31 @@ export class ServerGameSession {
     if (!command || typeof command !== 'object') return;
 
     if (command.type === 'actions.castSpell') {
-      const spellName = String(command.payload?.spellName ?? '').trim().toLowerCase();
-      if (spellName) {
-        this.castSpellByName(spellName, {
-          enforceCosts: false,
-          allowLocked: true,
-          showToast: false,
-        });
+      const rawSpellName = String(command.payload?.spellName ?? '').trim().toLowerCase();
+      if (rawSpellName) {
+        const generated = this.resolveGeneratedAction(rawSpellName);
+        if (generated) {
+          this.executeGeneratedAction(generated, 'onTick');
+        } else {
+          const resolvedSpellName = this.spells[rawSpellName] ? rawSpellName : this.parseSpell(rawSpellName);
+          if (resolvedSpellName) {
+            this.castSpellByName(resolvedSpellName, {
+              enforceCosts: false,
+              showToast: false,
+            });
+            this.spawnActionVisual(rawSpellName);
+          } else {
+            this.spawnActionVisual(rawSpellName);
+          }
+        }
+      }
+      return;
+    }
+
+    if (command.type === 'units.spawn') {
+      const unitKind = String(command.payload?.unitKind ?? '').trim();
+      if (unitKind) {
+        this.spawnGeneratedUnit(unitKind, command.payload?.lane);
       }
       return;
     }
@@ -851,7 +1347,17 @@ export class ServerGameSession {
       const amount = Number(command.payload?.amount);
       if (targetId && Number.isFinite(amount) && amount > 0) {
         const enemy = this.findEnemyById(targetId);
-        if (enemy) this.damageEnemy(enemy, amount);
+        if (enemy) {
+          this.damageEnemy(enemy, amount);
+          this.projectiles.push({
+            id: `proj_${this.projectileIdCounter++}`,
+            kind: 'zap',
+            x: enemy.x,
+            y: 2.5,
+            z: enemy.z,
+            life: 0.35,
+          });
+        }
       }
       return;
     }
@@ -862,6 +1368,22 @@ export class ServerGameSession {
       const durationSeconds = Number(command.payload?.durationSeconds);
       if (targetId && Number.isFinite(dps) && dps > 0 && Number.isFinite(durationSeconds) && durationSeconds > 0) {
         this.applyDotToEnemy(targetId, dps, durationSeconds);
+        const enemy = this.findEnemyById(targetId);
+        if (enemy) {
+          this.projectiles.push({
+            id: `proj_${this.projectileIdCounter++}`,
+            kind: 'fireball',
+            x: this.commander.x,
+            y: 1.8,
+            z: this.commander.z - 0.5,
+            targetId,
+            speed: 38,
+            damage: 0,
+            splash: 0,
+            effects: [],
+            intensity: 0.6,
+          });
+        }
       }
       return;
     }
@@ -875,12 +1397,27 @@ export class ServerGameSession {
       }
       return;
     }
+
+    if (command.type === 'ui.mountWidget') {
+      const props = command.payload?.props;
+      const id = String(props?.id ?? '').trim();
+      if (id) {
+        this.mountedWidgets.set(id, {
+          id,
+          title: String(props?.title ?? ''),
+          content: String(props?.content ?? ''),
+          position: String(props?.position ?? 'top-right'),
+        });
+      }
+      return;
+    }
   }
 
   updateResources(dt) {
     this.game.mana = clamp(this.game.mana + this.game.manaRegen * dt, 0, this.game.maxMana);
 
     this.tickRuntimeMultipliers(dt);
+    this.updateGeneratedActionStates(dt);
     this.comboTimer = Math.max(0, this.comboTimer - dt);
     if (this.comboTimer === 0) this.comboCount = 0;
   }
@@ -895,6 +1432,9 @@ export class ServerGameSession {
     this.updateResources(dt);
     this.updateWalls(dt);
     this.updateZones(dt);
+    this.updateUnits(dt);
+    this.updateActionVisuals(dt);
+    this.runGeneratedActions('onTick');
     this.updateEnemies(dt);
     this.updateProjectiles(dt);
 
@@ -925,7 +1465,6 @@ export class ServerGameSession {
     if (parsed) {
       const ok = this.castSpellByName(parsed, {
         enforceCosts: true,
-        allowLocked: false,
         showToast: true,
       });
       return {
@@ -941,7 +1480,6 @@ export class ServerGameSession {
           prompt: rawPrompt,
           wave: this.game.wave,
           mana: this.game.mana,
-          unlocks: this.game.unlocks,
           nearbyEnemies: this.enemies
             .filter((enemy) => !enemy.dead)
             .slice(0, 24)
@@ -1107,17 +1645,32 @@ export class ServerGameSession {
         primitiveRegistry: this.primitiveRegistry,
         mechanicRuntime: this.mechanicRuntime,
         sandboxStateStore: this.sandboxStateStore,
-        generateAssets: async () => ({ jobs: [], assets: [] }),
+        generateAssets: ({ envelope: applyEnvelope, artifact: applyArtifact }) =>
+          generateServerGlbAssetsForArtifact({
+            envelope: applyEnvelope,
+            artifact: applyArtifact,
+          }),
         resetToBaseline: async () => {
           this.mechanicRuntime.clear();
           await this.sandboxStateStore.reset();
+          this.generatedUnitDefs.clear();
+          this.generatedActionDefs.clear();
+          this.generatedActionState.clear();
+          this.generatedAssets = [];
+          this.mountedWidgets.clear();
+          this.units = [];
+          this.actionVisuals = [];
         },
         logger: console,
       });
+      this.syncGeneratedCatalogs(artifact, result.assets);
+      this.seedGeneratedStageEntities();
+      this.mountWidgetsFromArtifact(artifact);
       this.goldReservations.commitReservedGold(reservationId);
       return {
         generatedAssets: result.assets.length,
         activatedMechanics: result.activatedMechanics,
+        skippedMechanics: result.skippedMechanics,
       };
     } catch (error) {
       this.goldReservations.refundReservedGold(reservationId);
@@ -1149,6 +1702,22 @@ export class ServerGameSession {
         dead: enemy.dead,
         anim: enemy.anim,
       })),
+      units: this.units.map((unit) => ({
+        id: unit.id,
+        kind: unit.kind,
+        sourceId: unit.sourceId,
+        lane: unit.lane,
+        role: unit.role,
+        behavior: unit.behavior,
+        x: unit.x,
+        z: unit.z,
+        hp: unit.hp,
+        maxHp: unit.maxHp,
+        fallbackShape: unit.fallbackShape,
+        tint: unit.tint,
+        scale: unit.scale,
+        assetPath: unit.assetPath,
+      })),
       walls: this.walls.map((wall) => ({
         id: wall.id,
         lane: wall.lane,
@@ -1175,6 +1744,19 @@ export class ServerGameSession {
         radius: zone.radius,
         duration: zone.duration,
       })),
+      actionVisuals: this.actionVisuals.map((visual) => ({
+        id: visual.id,
+        actionName: visual.actionName,
+        sourceId: visual.sourceId,
+        kind: visual.kind,
+        x: visual.x,
+        z: visual.z,
+        radius: visual.radius,
+        color: visual.color,
+        duration: visual.duration,
+        assetPath: visual.assetPath,
+      })),
+      mountedWidgets: Array.from(this.mountedWidgets.values()),
       latestToast: this.lastToast,
     };
   }

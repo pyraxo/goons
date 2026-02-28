@@ -18,6 +18,14 @@ describe('validateRuntimeCommand', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('accepts valid units spawn command', () => {
+    const result = validateRuntimeCommand({
+      type: 'units.spawn',
+      payload: { unitKind: 'car_unit', lane: 2 },
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it('rejects invalid command type', () => {
     const result = validateRuntimeCommand({
       type: 'engine.eval',

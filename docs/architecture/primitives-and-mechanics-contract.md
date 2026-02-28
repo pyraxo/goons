@@ -27,8 +27,8 @@ A primitive definition has:
 Current implementation:
 
 - Catalog: `/src/runtime/primitives/primitiveCatalog.js`
-- Registry + validation: `/src/runtime/primitives/primitiveRegistry.js`
-- Runtime command schema: `/src/runtime/commandSchema.js`
+- Registry + validation: `/server/runtime/primitives/primitiveRegistry.js`
+- Runtime command schema: `/server/runtime/commandSchema.js`
 
 ## Mechanics Artifact Contract
 
@@ -68,8 +68,8 @@ Limits:
 
 Current implementation:
 
-- Artifact validator/compiler: `/src/runtime/mechanicsArtifact.js`
-- Runtime execution engine: `/src/runtime/mechanicRuntime.js`
+- Artifact validator/compiler: `/server/runtime/mechanicsArtifact.js`
+- Runtime execution engine: `/server/runtime/mechanicRuntime.js`
 
 ## Execution Pipeline
 
@@ -83,12 +83,12 @@ Current implementation:
 ## Adding New Primitives (AI-Friendly Workflow)
 
 1. Add definition in `/src/runtime/primitives/primitiveCatalog.js`.
-2. If new command types are needed, add them in `/src/runtime/commandSchema.js`.
+2. If new command types are needed, add them in `/server/runtime/commandSchema.js`.
 3. Implement command handling in `/src/game/engineSystems.js` (`applyRuntimeCommand`).
 4. Add unit tests:
-   - `/src/runtime/primitives/primitiveRegistry.test.js`
-   - `/src/runtime/commandSchema.test.js` (if command schema changed)
-   - `/src/runtime/mechanicsArtifact.test.js` (artifact invocation path)
+   - `/server/runtime/primitives/primitiveRegistry.test.js`
+   - `/server/runtime/commandSchema.test.js` (if command schema changed)
+   - `/server/runtime/mechanicsArtifact.test.js` (artifact invocation path)
 5. Update prompt template constraints in `/src/prompt/templateDrafts.js` so the model can use the new primitive.
 6. Update this architecture doc with primitive intent and constraints.
 

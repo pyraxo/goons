@@ -60,6 +60,37 @@ describe('parseArtifactOutputText', () => {
     expect(result.error).toContain('argsJson');
   });
 
+  it('accepts UI artifact with content and position', () => {
+    const rawObject = JSON.parse(validOutput());
+    rawObject.sandboxPatch.ui = [
+      {
+        id: 'kill_counter',
+        title: 'Kill Counter',
+        description: 'Shows total kills',
+        content: 'Kills: 0',
+        position: 'top-right',
+      },
+    ];
+    const result = parseArtifactOutputText(JSON.stringify(rawObject));
+    expect(result.ok).toBe(true);
+    expect(result.artifact?.sandboxPatch.ui).toHaveLength(1);
+    expect(result.artifact?.sandboxPatch.ui[0].content).toBe('Kills: 0');
+  });
+
+  it('rejects UI artifact without content field', () => {
+    const rawObject = JSON.parse(validOutput());
+    rawObject.sandboxPatch.ui = [
+      {
+        id: 'bad_widget',
+        title: 'Bad Widget',
+        description: 'Missing content',
+      },
+    ];
+    const result = parseArtifactOutputText(JSON.stringify(rawObject));
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('content');
+  });
+
   it('rejects missing required hook fields', () => {
     const rawObject = JSON.parse(validOutput());
     delete rawObject.sandboxPatch.mechanics[0].hooks[0].intervalSeconds;

@@ -17,11 +17,14 @@ function normalizePatchCollections(artifact) {
 function compileMechanicsBranch(mechanics, primitiveRegistry, logger) {
   const compiledMechanics = [];
   const appliedMechanics = [];
+  const skippedMechanics = [];
 
   for (const mechanic of mechanics) {
+    const mechanicId = mechanic?.id ?? '<unknown>';
     const validation = validateMechanicArtifact(mechanic, primitiveRegistry);
     if (!validation.ok) {
-      logger?.warn?.('[sandbox] skipped mechanic', mechanic?.id ?? '<unknown>', validation.error);
+      logger?.warn?.('[sandbox] skipped mechanic', mechanicId, validation.error);
+      skippedMechanics.push({ id: mechanicId, reason: validation.error });
       continue;
     }
 
@@ -34,13 +37,16 @@ function compileMechanicsBranch(mechanics, primitiveRegistry, logger) {
         lifecycle: mechanic.lifecycle,
       });
     } catch (error) {
-      logger?.warn?.('[sandbox] failed to compile mechanic', mechanic?.id ?? '<unknown>', error);
+      const reason = error instanceof Error ? error.message : String(error);
+      logger?.warn?.('[sandbox] failed to compile mechanic', mechanicId, error);
+      skippedMechanics.push({ id: mechanicId, reason });
     }
   }
 
   return {
     compiledMechanics,
     appliedMechanics,
+    skippedMechanics,
   };
 }
 
@@ -69,6 +75,7 @@ export async function runAgenticApplyWorkflow({
       assets: [],
       activatedMechanics: 0,
       appliedMechanics: [],
+      skippedMechanics: [],
     };
   }
 
@@ -114,5 +121,6 @@ export async function runAgenticApplyWorkflow({
     assets: toArray(assetsResult.assets),
     activatedMechanics: activationResult.activatedMechanics,
     appliedMechanics: patchResult.appliedMechanics,
+    skippedMechanics: patchResult.skippedMechanics,
   };
 }

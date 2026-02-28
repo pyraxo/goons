@@ -5,7 +5,6 @@ import { deterministicFallback, validateAndFinalizeSpell } from './spell-engine.
 const baseContext = {
   wave: 5,
   mana: 80,
-  unlocks: ['fireball', 'wall', 'frost', 'bolt'],
   nearbyEnemies: [],
 };
 

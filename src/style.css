@@ -257,7 +257,7 @@ canvas {
   bottom: 24px;
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: 1fr 190px 170px auto auto auto;
+  grid-template-columns: 1fr auto;
   gap: 8px;
   align-items: center;
   z-index: 35;
@@ -283,48 +283,85 @@ canvas {
   font-size: 14px;
 }
 
-#spellApiTarget,
-#modelPreset,
-#estimateBtn,
-#applyBtn,
-#cancelSpellQueueBtn {
+#submitPromptBtn {
   min-height: 42px;
   border-radius: 10px;
-  border: 1px solid #355f8d;
-  background: rgba(8, 17, 30, 0.92);
-  color: #eaf4ff;
-  font-size: 14px;
-  padding: 0 12px;
-}
-
-#estimateBtn,
-#applyBtn,
-#cancelSpellQueueBtn {
   border: none;
-  cursor: pointer;
-  font-weight: 700;
-}
-
-#estimateBtn {
-  background: #3f72af;
-  color: #fff;
-}
-
-#applyBtn {
   background: var(--accent);
   color: #1a1d22;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 0 16px;
+  cursor: pointer;
 }
 
-#cancelSpellQueueBtn {
-  background: #a33f5f;
-  color: #fff;
-}
-
-#applyBtn:disabled,
-#cancelSpellQueueBtn:disabled {
+#submitPromptBtn:disabled {
   background: #4f5460;
   color: #9aa0ad;
   cursor: not-allowed;
+}
+
+.widget-zone {
+  position: fixed;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: 320px;
+}
+
+.widget-zone--top-left {
+  top: 180px;
+  left: 14px;
+}
+
+.widget-zone--top-right {
+  top: 60px;
+  right: 14px;
+}
+
+.widget-zone--bottom-left {
+  bottom: 240px;
+  left: 14px;
+}
+
+.widget-zone--bottom-right {
+  bottom: 240px;
+  right: 14px;
+}
+
+.widget-zone--center-top {
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.widget-panel {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: #dbe9f8;
+  backdrop-filter: blur(5px);
+  pointer-events: auto;
+  min-width: 160px;
+}
+
+.widget-title {
+  margin: 0 0 4px 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.widget-content {
+  margin: 0;
+  font-family: monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  line-height: 1.4;
 }
 
 @media (max-width: 840px) {
@@ -363,9 +400,7 @@ canvas {
     bottom: 14px;
   }
 
-  #estimateBtn,
-  #applyBtn,
-  #cancelSpellQueueBtn {
+  #submitPromptBtn {
     width: 100%;
   }
 }

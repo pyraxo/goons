@@ -1,5 +1,5 @@
 import { validateRuntimeCommandList } from '../commandSchema.js';
-import { BUILTIN_PRIMITIVE_CATALOG } from './primitiveCatalog.js';
+import { BUILTIN_PRIMITIVE_CATALOG } from '../../../src/runtime/primitives/primitiveCatalog.js';
 
 function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);

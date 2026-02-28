@@ -1,4 +1,4 @@
-import { MECHANIC_HOOK_EVENTS } from './primitives/primitiveCatalog.js';
+import { MECHANIC_HOOK_EVENTS } from '../../src/runtime/primitives/primitiveCatalog.js';
 
 const ALLOWED_LIFECYCLES = new Set(['persistent', 'timed', 'wave']);
 const HOOK_EVENTS = new Set(MECHANIC_HOOK_EVENTS);

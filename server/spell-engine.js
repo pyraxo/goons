@@ -141,11 +141,6 @@ export function getToolDefinition() {
   };
 }
 
-function normalizeUnlocks(unlocks) {
-  const value = Array.isArray(unlocks) ? unlocks.filter((item) => typeof item === 'string') : [];
-  return new Set(value);
-}
-
 function allowedArchetypes() {
   return new Set(ARCHETYPES);
 }
@@ -226,7 +221,7 @@ function sanitizeDraft(draft, context, warnings) {
   let archetype = typeof draft?.archetype === 'string' ? draft.archetype : 'projectile';
   if (!archetypeSet.has(archetype)) {
     warnings.push(`archetype ${archetype} unavailable, downgraded`);
-    archetype = unlocks.has('fireball') ? 'aoe_burst' : 'projectile';
+    archetype = 'projectile';
   }
 
   const element = ELEMENTS.includes(draft?.element) ? draft.element : 'arcane';

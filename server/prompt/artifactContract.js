@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-import { PROMPT_TYPES } from '../types/prompt.js';
-import { MECHANIC_HOOK_EVENTS } from '../runtime/primitives/primitiveCatalog.js';
+import { PROMPT_TYPES } from '../../src/types/prompt.js';
+import { MECHANIC_HOOK_EVENTS } from '../../src/runtime/primitives/primitiveCatalog.js';
 
 const LifecycleSchema = z.enum(['persistent', 'timed', 'wave']);
 const PromptTypeSchema = z.enum(PROMPT_TYPES);
@@ -16,11 +16,15 @@ function isJsonObjectString(value) {
   }
 }
 
+const WIDGET_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center-top'];
+
 const UiArtifactSchema = z
   .object({
     id: z.string().min(1),
     title: z.string().min(1),
     description: z.string().min(1),
+    content: z.string().min(1),
+    position: z.enum(WIDGET_POSITIONS).optional(),
   })
   .strict();
 
@@ -65,6 +69,15 @@ const UnitArtifactSchema = z
     name: z.string().min(1),
     role: z.string().min(1),
     behavior: z.string().min(1),
+    visual: z
+      .object({
+        assetRef: z.string().min(1).optional(),
+        fallbackShape: z.enum(['box', 'capsule', 'sphere', 'cone']).optional(),
+        scale: z.number().min(0.2).max(4).optional(),
+        tint: z.string().min(1).max(24).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -74,6 +87,15 @@ const ActionArtifactSchema = z
     name: z.string().min(1),
     trigger: z.string().min(1),
     effect: z.string().min(1),
+    visual: z
+      .object({
+        assetRef: z.string().min(1).optional(),
+        vfxShape: z.enum(['ring', 'orb', 'wave']).optional(),
+        color: z.string().min(1).max(24).optional(),
+        durationMs: z.number().int().min(100).max(12_000).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

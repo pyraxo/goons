@@ -50,7 +50,6 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
     promptPreview: prompt.slice(0, 60),
     wave: ctx.wave,
     mana: ctx.mana,
-    unlocks: ctx.unlocks,
     nearbyEnemyCount: ctx.nearbyEnemies.length,
   });
   if (templateMatch) {
@@ -105,10 +104,7 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
 
     resolved = deterministicFallback(prompt, ctx);
     if (!resolved.ok) {
-      const emergency = deterministicFallback('default arcane projectile', {
-        ...ctx,
-        unlocks: ['fireball', 'wall', 'frost', 'bolt'],
-      });
+      const emergency = deterministicFallback('default arcane projectile', ctx);
       resolved = emergency;
     }
     log('fallback_applied', {
@@ -252,7 +248,6 @@ MECHANICAL RULES:
               prompt,
               wave: context.wave,
               mana: context.mana,
-              unlocks: context.unlocks,
               nearbyEnemies: context.nearbyEnemies,
               templateContext: templateMatch
                 ? {
@@ -470,17 +465,12 @@ function sanitizeRequestBody(body) {
 
   const wave = clamp(Math.round(Number(body.wave ?? 1)), 1, 60);
   const mana = clamp(Number(body.mana ?? 0), 0, 999);
-  const unlocks = Array.isArray(body.unlocks)
-    ? body.unlocks.filter((value) => typeof value === 'string').slice(0, 8)
-    : [];
-
   return {
     ok: true,
     value: {
       prompt,
       wave,
       mana,
-      unlocks,
       nearbyEnemies,
     },
   };

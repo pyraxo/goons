@@ -15,7 +15,7 @@ export const GOON_ATTACK_DAMAGE = 1;
 
 export function createInitialGameState() {
   return {
-    baseHp: 260,
+    baseHp: 10000,
     maxMana: 120,
     mana: 120,
     manaRegen: 14,
@@ -24,7 +24,7 @@ export function createInitialGameState() {
     wave: 1,
     elapsed: 0,
     kills: 0,
-    unlocks: ['fireball', 'wall'],
+    globalCooldown: 0,
     gameOver: false,
   };
 }
