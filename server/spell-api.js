@@ -1,0 +1,464 @@
+import { deterministicFallback, getToolDefinition, validateAndFinalizeSpell } from './spell-engine.js';
+
+const metrics = {
+  total: 0,
+  llmSuccess: 0,
+  schemaFail: 0,
+  validationFail: 0,
+  fallback: 0,
+  totalLatencyMs: 0,
+  providerLatencyMs: [],
+};
+
+const MODEL = process.env.OPENAI_MODEL || 'gpt-5';
+const API_TIMEOUT_MS = Number(process.env.SPELL_API_TIMEOUT_MS || 10000);
+const DEBUG_FULL_PAYLOAD = process.env.SPELL_API_DEBUG_FULL_PAYLOAD !== '0';
+const REASONING_EFFORT = process.env.SPELL_REASONING_EFFORT || 'minimal';
+const PRIMARY_MAX_OUTPUT_TOKENS = Number(process.env.SPELL_API_MAX_OUTPUT_TOKENS || 420);
+const RETRY_MAX_OUTPUT_TOKENS = Number(
+  process.env.SPELL_API_RETRY_MAX_OUTPUT_TOKENS || Math.max(PRIMARY_MAX_OUTPUT_TOKENS, 700)
+);
+
+export async function handleSpellGenerate(requestBody, obs = {}) {
+  const requestId = obs.requestId || 'req-unknown';
+  const log = createLogger(requestId);
+  const startedAt = Date.now();
+  metrics.total += 1;
+  log('request_received', {
+    hasBody: Boolean(requestBody && typeof requestBody === 'object'),
+  });
+
+  const context = sanitizeRequestBody(requestBody);
+  if (!context.ok) {
+    log('request_invalid', { error: context.error });
+    return {
+      status: 400,
+      payload: {
+        error: context.error,
+      },
+    };
+  }
+
+  const ctx = context.value;
+  const prompt = ctx.prompt;
+  log('request_validated', {
+    promptPreview: prompt.slice(0, 60),
+    wave: ctx.wave,
+    mana: ctx.mana,
+    unlocks: ctx.unlocks,
+    nearbyEnemyCount: ctx.nearbyEnemies.length,
+  });
+
+  let source = 'fallback';
+  let resolved;
+  let fallbackReason = null;
+
+  try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      fallbackReason = 'missing_api_key';
+      throw new Error('OPENAI_API_KEY missing');
+    }
+
+    const draft = await fetchSpellDraftFromOpenAI(apiKey, prompt, ctx, log);
+    const finalized = validateAndFinalizeSpell(draft, ctx);
+
+    if (!finalized.ok) {
+      metrics.validationFail += 1;
+      fallbackReason = `validation_failed:${finalized.reason}`;
+      throw new Error(`validation_failed:${finalized.reason}`);
+    }
+
+    resolved = finalized;
+    source = 'llm';
+    metrics.llmSuccess += 1;
+    log('spell_validated', {
+      source,
+      archetype: resolved.spell?.archetype,
+      effects: resolved.spell?.effects || [],
+      powerScore: resolved.powerScore,
+      cost: resolved.spell?.cost || null,
+    });
+  } catch (error) {
+    metrics.fallback += 1;
+    const message = String(error?.message || '');
+    if (message.startsWith('schema_')) {
+      metrics.schemaFail += 1;
+    }
+    fallbackReason = fallbackReason || message || 'unknown_error';
+
+    resolved = deterministicFallback(prompt, ctx);
+    if (!resolved.ok) {
+      const emergency = deterministicFallback('default arcane projectile', {
+        ...ctx,
+        unlocks: ['fireball', 'wall', 'frost', 'bolt'],
+      });
+      resolved = emergency;
+    }
+    log('fallback_applied', {
+      fallbackReason,
+      archetype: resolved?.spell?.archetype,
+      effects: resolved?.spell?.effects || [],
+      powerScore: resolved?.powerScore,
+      cost: resolved?.spell?.cost || null,
+      warnings: resolved?.warnings || [],
+    });
+  }
+
+  const latencyMs = Date.now() - startedAt;
+  metrics.totalLatencyMs += latencyMs;
+  log('response_ready', {
+    source,
+    latencyMs,
+    fallbackReason,
+  });
+
+  return {
+    status: 200,
+    payload: {
+      source,
+      spell: resolved.spell,
+      meta: {
+        latencyMs,
+        powerScore: resolved.powerScore,
+        warnings: resolved.warnings,
+        fallbackReason,
+        telemetry: summarizeMetrics(),
+      },
+    },
+  };
+}
+
+function summarizeMetrics() {
+  const count = Math.max(1, metrics.total);
+  return {
+    total: metrics.total,
+    llmSuccess: metrics.llmSuccess,
+    schemaFail: metrics.schemaFail,
+    validationFail: metrics.validationFail,
+    fallback: metrics.fallback,
+    avgLatencyMs: Math.round(metrics.totalLatencyMs / count),
+    providerLatencyP50Ms: percentile(metrics.providerLatencyMs, 0.5),
+    providerLatencyP95Ms: percentile(metrics.providerLatencyMs, 0.95),
+    providerLatencyMaxMs: metrics.providerLatencyMs.length ? Math.max(...metrics.providerLatencyMs) : 0,
+    timeoutMs: API_TIMEOUT_MS,
+  };
+}
+
+async function fetchSpellDraftFromOpenAI(apiKey, prompt, context, log) {
+  const attempts = [PRIMARY_MAX_OUTPUT_TOKENS, RETRY_MAX_OUTPUT_TOKENS];
+  let lastError = null;
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const maxOutputTokens = attempts[index];
+    if (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
+      continue;
+    }
+
+    try {
+      return await fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, {
+        attempt: index + 1,
+        maxOutputTokens: Math.round(maxOutputTokens),
+      });
+    } catch (error) {
+      lastError = error;
+      const reason = String(error?.message || '');
+      const hasNextAttempt = index + 1 < attempts.length;
+      const retryable = reason === 'schema_no_tool_call:max_output_tokens';
+      if (retryable && hasNextAttempt) {
+        log('provider_call_retry', {
+          reason,
+          fromMaxOutputTokens: Math.round(maxOutputTokens),
+          toMaxOutputTokens: Math.round(attempts[index + 1]),
+          attempt: index + 2,
+        });
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError || new Error('provider_no_attempts');
+}
+
+async function fetchSpellDraftFromOpenAIAttempt(apiKey, prompt, context, log, options) {
+  const { attempt, maxOutputTokens } = options;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const providerStart = Date.now();
+  const tool = getToolDefinition();
+  const requestPayload = {
+    model: MODEL,
+    max_output_tokens: maxOutputTokens,
+    reasoning: {
+      effort: REASONING_EFFORT,
+    },
+    tool_choice: 'required',
+    parallel_tool_calls: false,
+    tools: [tool],
+    instructions:
+      'You are a spell balancer. Return exactly one craft_spell tool call only. Prioritize valid output for a real-time action game.',
+    input: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: JSON.stringify({
+              prompt,
+              wave: context.wave,
+              mana: context.mana,
+              unlocks: context.unlocks,
+              nearbyEnemies: context.nearbyEnemies,
+            }),
+          },
+        ],
+      },
+    ],
+  };
+  const requestBody = JSON.stringify(requestPayload);
+  log('provider_call_start', {
+    attempt,
+    model: MODEL,
+    timeoutMs: API_TIMEOUT_MS,
+    reasoningEffort: REASONING_EFFORT,
+    maxOutputTokens,
+    bodyBytes: byteLength(requestBody),
+    promptChars: prompt.length,
+    nearbyEnemyCount: context.nearbyEnemies.length,
+    toolStrict: tool.strict,
+  });
+  if (DEBUG_FULL_PAYLOAD) {
+    log('provider_request_payload_full', {
+      payloadPreview: truncate(requestBody, 4000),
+    });
+  }
+
+  let response;
+  try {
+    response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: requestBody,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      log('provider_call_error', {
+        reason: `provider_timeout_${API_TIMEOUT_MS}ms`,
+      });
+      throw new Error(`provider_timeout_${API_TIMEOUT_MS}ms`);
+    }
+    log('provider_call_error', {
+      reason: `provider_fetch_error:${String(error?.message || error)}`,
+    });
+    throw new Error(`provider_fetch_error:${String(error?.message || error)}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+  const providerElapsedMs = Date.now() - providerStart;
+  log('provider_call_done', {
+    status: response.status,
+    elapsedMs: providerElapsedMs,
+  });
+  metrics.providerLatencyMs.push(providerElapsedMs);
+  if (metrics.providerLatencyMs.length > 200) {
+    metrics.providerLatencyMs.shift();
+  }
+
+  const responseReadStart = Date.now();
+  const responseText = await response.text();
+  const responseReadMs = Date.now() - responseReadStart;
+  log('provider_response_body', {
+    status: response.status,
+    readMs: responseReadMs,
+    bodyBytes: byteLength(responseText),
+  });
+
+  if (!response.ok) {
+    log('provider_call_error', {
+      reason: `provider_http_${response.status}`,
+      bodyPreview: truncate(responseText, 400),
+    });
+    throw new Error(`provider_http_${response.status}:${truncate(responseText, 120)}`);
+  }
+
+  let json;
+  try {
+    json = JSON.parse(responseText);
+  } catch {
+    log('provider_call_error', {
+      reason: 'provider_response_not_json',
+      bodyPreview: truncate(responseText, 280),
+    });
+    throw new Error('provider_response_not_json');
+  }
+  log('provider_response_shape', {
+    responseStatus: json?.status || null,
+    outputCount: Array.isArray(json?.output) ? json.output.length : 0,
+    outputTypes: Array.isArray(json?.output) ? json.output.slice(0, 8).map((item) => item?.type || 'unknown') : [],
+    hasUsage: Boolean(json?.usage),
+    usage: json?.usage
+      ? {
+          inputTokens: json.usage.input_tokens ?? null,
+          outputTokens: json.usage.output_tokens ?? null,
+          totalTokens: json.usage.total_tokens ?? null,
+        }
+      : null,
+    incompleteDetails: json?.incomplete_details || null,
+  });
+  const toolCall = extractToolCall(json);
+  if (!toolCall) {
+    const incompleteReason = json?.incomplete_details?.reason || null;
+    log('provider_call_error', {
+      reason: incompleteReason ? `schema_no_tool_call:${incompleteReason}` : 'schema_no_tool_call',
+    });
+    if (incompleteReason) {
+      throw new Error(`schema_no_tool_call:${incompleteReason}`);
+    }
+    throw new Error('schema_no_tool_call');
+  }
+
+  const argsRaw = toolCall.arguments;
+  if (typeof argsRaw !== 'string') {
+    log('provider_call_error', {
+      reason: 'schema_invalid_tool_args',
+    });
+    throw new Error('schema_invalid_tool_args');
+  }
+  log('provider_tool_call_found', {
+    name: toolCall.name,
+    argsChars: argsRaw.length,
+  });
+  if (DEBUG_FULL_PAYLOAD) {
+    log('provider_tool_call_args_full', {
+      argsPreview: truncate(argsRaw, 4000),
+    });
+  }
+
+  let draft;
+  try {
+    draft = JSON.parse(argsRaw);
+  } catch {
+    log('provider_call_error', {
+      reason: 'schema_args_not_json',
+    });
+    throw new Error('schema_args_not_json');
+  }
+
+  return draft;
+}
+
+function extractToolCall(payload) {
+  if (!payload || !Array.isArray(payload.output)) {
+    return null;
+  }
+
+  for (const item of payload.output) {
+    if (item?.type === 'function_call' && item?.name === 'craft_spell') {
+      return item;
+    }
+
+    if (Array.isArray(item?.tool_calls)) {
+      for (const toolCall of item.tool_calls) {
+        const name = toolCall?.name ?? toolCall?.function?.name;
+        const args = toolCall?.arguments ?? toolCall?.function?.arguments;
+        if (name === 'craft_spell') {
+          return {
+            type: 'function_call',
+            name,
+            arguments: args,
+          };
+        }
+      }
+    }
+
+    if (Array.isArray(item?.content)) {
+      for (const contentItem of item.content) {
+        if (contentItem?.type === 'function_call' && contentItem?.name === 'craft_spell') {
+          return contentItem;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function sanitizeRequestBody(body) {
+  if (!body || typeof body !== 'object') {
+    return { ok: false, error: 'invalid request body' };
+  }
+
+  const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+  if (!prompt) {
+    return { ok: false, error: 'prompt is required' };
+  }
+
+  const nearbyEnemies = Array.isArray(body.nearbyEnemies)
+    ? body.nearbyEnemies
+        .map((enemy) => ({
+          lane: clamp(Math.round(Number(enemy?.lane ?? 2)), 0, 4),
+          kind: typeof enemy?.kind === 'string' ? enemy.kind.slice(0, 16) : 'melee',
+          hp: clamp(Number(enemy?.hp ?? 20), 1, 200),
+          z: clamp(Number(enemy?.z ?? 0), -120, 100),
+        }))
+        .sort((a, b) => Math.abs(a.z) - Math.abs(b.z))
+        .slice(0, 16)
+    : [];
+
+  const wave = clamp(Math.round(Number(body.wave ?? 1)), 1, 60);
+  const mana = clamp(Number(body.mana ?? 0), 0, 999);
+  const unlocks = Array.isArray(body.unlocks)
+    ? body.unlocks.filter((value) => typeof value === 'string').slice(0, 8)
+    : [];
+
+  return {
+    ok: true,
+    value: {
+      prompt,
+      wave,
+      mana,
+      unlocks,
+      nearbyEnemies,
+    },
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function createLogger(requestId) {
+  return (event, fields = {}) => {
+    console.log('[spell-api]', event, { requestId, ...fields });
+  };
+}
+
+function percentile(values, ratio) {
+  if (!values.length) {
+    return 0;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * ratio)));
+  return sorted[idx];
+}
+
+export function getSpellApiMetrics() {
+  return summarizeMetrics();
+}
+
+function truncate(value, maxChars) {
+  const text = String(value ?? '');
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, maxChars)}...[truncated ${text.length - maxChars} chars]`;
+}
+
+function byteLength(value) {
+  return Buffer.byteLength(String(value ?? ''), 'utf8');
+}

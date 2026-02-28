@@ -1,6 +1,6 @@
 # Prompt Defense 3D (Three.js)
 
-Top-down 3D endless horde prototype where you defend a base by typing free-text prompts that map to spells.
+Top-down 3D endless horde prototype where you defend a base by typing free-text prompts that are converted into structured spell configs through an LLM tool call.
 
 ## Current gameplay (v1)
 
@@ -15,17 +15,13 @@ Top-down 3D endless horde prototype where you defend a base by typing free-text 
   - Wave 3: `frost`
   - Wave 6: `bolt`
 
-## Free-text prompts
+## Dynamic spell engine (v2)
 
-Prompt parser uses:
-1. Exact match (`fireball`)
-2. Word containment (`cast fireball now`)
-3. Fuzzy best-match (small typos)
-
-Examples:
-- `fireball`
-- `spawn wall`
-- `freez all` -> likely `frost`
+- Frontend sends prompt + combat context to `POST /api/spells/generate`
+- Vite server middleware calls the LLM with forced `craft_spell` tool calling
+- Server validates archetype/effects/compatibility and normalizes unsafe values
+- If LLM output is invalid or unavailable, deterministic fallback generates a safe spell
+- Frontend instant-casts and shows `LLM: archetype/effects` or `Fallback cast`
 
 ## Spell behavior
 
@@ -38,10 +34,55 @@ Examples:
 
 ```bash
 npm install
-npm run dev
+npm run dev:backend
+npm run dev:frontend
 ```
 
-Then open the local Vite URL (usually `http://localhost:5173`).
+Then open the frontend URL (usually `http://localhost:5173`).
+
+You can also run both in one shell:
+
+```bash
+npm run dev:all
+```
+
+Required env:
+
+```bash
+OPENAI_API_KEY=...
+# optional
+OPENAI_MODEL=gpt-5
+SPELL_API_TIMEOUT_MS=10000
+SPELL_BACKEND_PORT=8787
+SPELL_BACKEND_HOST=127.0.0.1
+SPELL_API_DEBUG_FULL_PAYLOAD=1
+SPELL_REASONING_EFFORT=minimal
+SPELL_API_MAX_OUTPUT_TOKENS=420
+SPELL_API_RETRY_MAX_OUTPUT_TOKENS=700
+```
+
+## Backend debugability
+
+Backend API runs as a separate process (`server/index.js`) and logs every cast request:
+
+- `[spell-api] llm_cast`: tool call worked and produced a validated spell
+- `[spell-api] fallback`: fallback was used; inspect `fallbackReason` and `warnings`
+- Per-request lifecycle logs with `requestId`: `request_received`, `request_validated`, `provider_call_start`, `provider_call_done`, `provider_call_error`, `fallback_applied`, `response_ready`
+- Full request/response payload preview logging is enabled by default. Set `SPELL_API_DEBUG_FULL_PAYLOAD=0` to disable it.
+
+Health check:
+
+```bash
+curl http://localhost:8787/healthz
+```
+
+`/healthz` now includes backend telemetry (`providerLatencyP50Ms`, `providerLatencyP95Ms`, `providerLatencyMaxMs`) so you can tune timeout from observed traffic.
+
+## Tests
+
+```bash
+npm test
+```
 
 ## Tune quickly
 

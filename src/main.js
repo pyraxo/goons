@@ -52,6 +52,8 @@ const spellCooldowns = new Map();
 const enemies = [];
 const projectiles = [];
 const walls = [];
+const zones = [];
+let spellRequestInFlight = false;
 
 const dom = {
   baseHp: document.getElementById('baseHp'),
@@ -248,6 +250,11 @@ function createEnemy(kind, lane) {
     worth: config.worth,
     aimHeight: Math.max(1.1, config.size * 0.95),
     frozenFor: 0,
+    slowFor: 0,
+    slowFactor: 1,
+    stunnedFor: 0,
+    burningFor: 0,
+    burnDps: 0,
     dead: false,
     deathTimer: 0,
     hitTimer: 0,
@@ -343,46 +350,130 @@ function closeCommand() {
   dom.commandInput.blur();
 }
 
-function castFromPrompt(rawPrompt) {
+async function castFromPrompt(rawPrompt) {
   if (GAME.globalCooldown > 0) {
     setToast('Global cooldown active');
     return;
   }
 
-  const spellName = parseSpell(rawPrompt);
-  if (!spellName) {
-    setToast(`No spell match for "${rawPrompt}"`);
+  if (spellRequestInFlight) {
+    setToast('Spellcrafting in progress');
     return;
   }
 
-  if (!GAME.unlocks.includes(spellName)) {
-    setToast(`Spell not unlocked: ${spellName}`);
-    return;
+  const payload = {
+    prompt: rawPrompt,
+    wave: GAME.wave,
+    mana: GAME.mana,
+    unlocks: GAME.unlocks,
+    nearbyEnemies: enemies
+      .filter((enemy) => !enemy.dead)
+      .slice(0, 24)
+      .map((enemy) => ({
+        lane: enemy.lane,
+        kind: enemy.kind,
+        hp: enemy.hp,
+        z: enemy.mesh.position.z,
+      })),
+  };
+
+  spellRequestInFlight = true;
+  try {
+    const response = await fetch('/api/spells/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const json = await response.json();
+    const casted = castFromConfig(json?.spell);
+    if (!casted) {
+      return;
+    }
+
+    if (json?.source === 'fallback') {
+      const reason = json?.meta?.fallbackReason ? ` (${json.meta.fallbackReason})` : '';
+      setToast(`Fallback cast${reason}`);
+      console.warn('[spell] fallback', {
+        reason: json?.meta?.fallbackReason || null,
+        warnings: json?.meta?.warnings || [],
+        latencyMs: json?.meta?.latencyMs,
+      });
+    } else {
+      const effectText = Array.isArray(json?.spell?.effects) && json.spell.effects.length
+        ? json.spell.effects.join('+')
+        : 'none';
+      setToast(`LLM: ${json?.spell?.archetype || 'spell'}/${effectText}`);
+    }
+  } catch (error) {
+    console.warn('[main] spell generation failed', error);
+    setToast('Spell engine unavailable');
+  } finally {
+    spellRequestInFlight = false;
+  }
+}
+
+function castFromConfig(spell) {
+  if (!spell || typeof spell !== 'object') {
+    return false;
   }
 
-  const spell = SPELLS[spellName];
-  const spellCd = spellCooldowns.get(spellName) || 0;
+  const archetype = String(spell.archetype || 'projectile');
+  if (!isArchetypeUnlocked(archetype)) {
+    setToast(`Archetype not unlocked: ${archetype}`);
+    return false;
+  }
+
+  const cost = spell.cost || {};
+  const manaCost = clamp(Number(cost.mana || 12), 8, 65);
+  const cooldown = clamp(Number(cost.cooldownSec || 0.6), 0.2, 10);
+  const spellCd = spellCooldowns.get(archetype) || 0;
 
   if (spellCd > 0) {
-    setToast(`${spellName} cooldown ${spellCd.toFixed(1)}s`);
-    return;
+    setToast(`${archetype} cooldown ${spellCd.toFixed(1)}s`);
+    return false;
   }
 
-  if (GAME.mana < spell.cost) {
+  if (GAME.mana < manaCost) {
     setToast('Not enough mana');
-    return;
+    return false;
   }
 
-  const casted = spell.cast();
+  let casted = false;
+  if (archetype === 'zone_control') {
+    casted = castZoneFromConfig(spell);
+  } else if (archetype === 'chain') {
+    casted = castChainFromConfig(spell);
+  } else {
+    casted = castProjectileFromConfig(spell, archetype);
+  }
+
   if (!casted) {
-    return;
+    return false;
   }
 
-  GAME.mana -= spell.cost;
-  spellCooldowns.set(spellName, spell.cooldown);
+  GAME.mana -= manaCost;
+  spellCooldowns.set(archetype, cooldown);
   GAME.globalCooldown = 0.2;
-  setToast(`Cast ${spellName}: ${spell.description}`);
   refreshHud();
+  return true;
+}
+
+function isArchetypeUnlocked(archetype) {
+  if (archetype === 'chain') {
+    return GAME.unlocks.includes('bolt');
+  }
+  if (archetype === 'zone_control') {
+    return GAME.unlocks.includes('wall');
+  }
+  if (archetype === 'aoe_burst') {
+    return GAME.unlocks.includes('fireball');
+  }
+  return true;
 }
 
 function parseSpell(prompt) {
@@ -440,90 +531,224 @@ function levenshtein(a, b) {
 }
 
 function castFireball() {
-  const target = nearestEnemy();
+  return castProjectileFromConfig(
+    {
+      archetype: 'aoe_burst',
+      element: 'fire',
+      targeting: { mode: 'nearest' },
+      numbers: { damage: 60, radius: 3.4, speed: 32, durationSec: 0 },
+      effects: ['burn'],
+      vfx: { intensity: 1, shape: 'orb' },
+    },
+    'aoe_burst'
+  );
+}
+
+function castWall() {
+  return castZoneFromConfig({
+    archetype: 'zone_control',
+    element: 'earth',
+    targeting: { mode: 'lane' },
+    numbers: { damage: 10, radius: 2.0, durationSec: 8, tickRate: 0.8 },
+    effects: ['slow', 'knockback'],
+    vfx: { intensity: 0.75, shape: 'wall' },
+  });
+}
+
+function castFrost() {
+  return castZoneFromConfig({
+    archetype: 'zone_control',
+    element: 'ice',
+    targeting: { mode: 'front_cluster' },
+    numbers: { damage: 14, radius: 4.2, durationSec: 2.2, tickRate: 0.7 },
+    effects: ['freeze', 'slow'],
+    vfx: { intensity: 0.9, shape: 'ring' },
+  });
+}
+
+function castBolt() {
+  return castChainFromConfig({
+    archetype: 'chain',
+    element: 'storm',
+    targeting: { mode: 'front_cluster' },
+    numbers: { damage: 42, radius: 2.1, durationSec: 0, chainCount: 4 },
+    effects: ['stun'],
+    vfx: { intensity: 1.1, shape: 'arc' },
+  });
+}
+
+function castProjectileFromConfig(spell, archetype = 'projectile') {
+  const target = selectTarget(spell.targeting);
   if (!target) {
-    setToast('No target for fireball');
+    setToast('No target for projectile');
     return false;
   }
 
+  const power = clamp(Number(spell?.vfx?.intensity || 0.85), 0.2, 1.4);
+  const elementColor = colorForElement(spell?.element);
   const orb = new THREE.Mesh(
-    new THREE.SphereGeometry(0.56, 10, 10),
-    new THREE.MeshStandardMaterial({ color: 0xff8840, emissive: 0x8c2b00, emissiveIntensity: 0.9 })
+    new THREE.SphereGeometry(archetype === 'aoe_burst' ? 0.62 : 0.5, 10, 10),
+    new THREE.MeshStandardMaterial({
+      color: elementColor.base,
+      emissive: elementColor.emissive,
+      emissiveIntensity: 0.55 + power * 0.45,
+    })
   );
   orb.position.copy(commander.mesh.position).add(new THREE.Vector3(0, 1.8, -0.5));
   orb.castShadow = true;
   scene.add(orb);
 
   projectiles.push({
-    kind: 'fireball',
+    kind: archetype,
     mesh: orb,
     target,
-    speed: 32,
-    damage: 60,
-    splash: 3.4,
+    speed: clamp(Number(spell?.numbers?.speed || 30), 8, 44),
+    damage: clamp(Number(spell?.numbers?.damage || 24), 8, 150),
+    splash: clamp(Number(spell?.numbers?.radius || (archetype === 'aoe_burst' ? 3.4 : 2.0)), 0.8, 8),
+    effects: Array.isArray(spell?.effects) ? spell.effects : [],
+    element: spell?.element || 'arcane',
+    intensity: power,
   });
 
   return true;
 }
 
-function castWall() {
-  if (walls.length >= 6) {
-    setToast('Too many active walls');
-    return false;
+function castZoneFromConfig(spell) {
+  const duration = clamp(Number(spell?.numbers?.durationSec || 4), 1, 10);
+  const radius = clamp(Number(spell?.numbers?.radius || 2.2), 1, 8);
+  const damage = clamp(Number(spell?.numbers?.damage || 12), 1, 120);
+  const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.8), 0.2, 2);
+  const effects = Array.isArray(spell?.effects) ? spell.effects : [];
+  const lane = chooseLaneForZone(spell?.targeting);
+  const z = zoneZForTargeting(spell?.targeting);
+  const color = colorForElement(spell?.element).base;
+
+  if (spell?.vfx?.shape === 'wall') {
+    if (walls.length >= 6) {
+      setToast('Too many active walls');
+      return false;
+    }
+
+    const wall = new THREE.Mesh(
+      new THREE.BoxGeometry(5.6, 3.6, 1.2),
+      new THREE.MeshStandardMaterial({ color, roughness: 0.92 })
+    );
+    wall.position.set(laneX(lane), 1.8, z);
+    wall.castShadow = true;
+    wall.receiveShadow = true;
+    scene.add(wall);
+    const wallHp = clamp(100 + damage * 1.2 + duration * 9, 80, 240);
+    walls.push({
+      mesh: wall,
+      lane,
+      hp: wallHp,
+      maxHp: wallHp,
+      duration,
+    });
+    zones.push({
+      mesh: wall,
+      lane,
+      radius,
+      z,
+      damage: damage * 0.35,
+      duration,
+      tickRate,
+      effects,
+      timer: 0,
+      isLinkedWall: true,
+    });
+  } else {
+    const ring = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius, 0.45, 24, 1, true),
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.24,
+        transparent: true,
+        opacity: 0.7,
+      })
+    );
+    ring.position.set(laneX(lane), 0.24, z);
+    scene.add(ring);
+    zones.push({
+      mesh: ring,
+      lane,
+      radius,
+      z,
+      damage,
+      duration,
+      tickRate,
+      effects,
+      timer: 0,
+      isLinkedWall: false,
+    });
   }
 
-  const pressure = lanePressure();
-  const lane = pressure[0].lane;
-
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(5.6, 3.6, 1.2),
-    new THREE.MeshStandardMaterial({ color: 0x6f7f95, roughness: 0.92 })
-  );
-
-  const z = Math.max(BASE_Z - 28, Math.min(BASE_Z - 9, commander.mesh.position.z - 8));
-  mesh.position.set(laneX(lane), 1.8, z);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  scene.add(mesh);
-
-  walls.push({
-    mesh,
-    lane,
-    hp: 140,
-    duration: 12,
-  });
+  if (effects.includes('freeze')) {
+    for (const enemy of enemies) {
+      if (!enemy.dead) {
+        enemy.frozenFor = Math.max(enemy.frozenFor, Math.min(2.6, duration));
+      }
+    }
+  }
 
   return true;
 }
 
-function castFrost() {
+function castChainFromConfig(spell) {
   const liveEnemies = enemies.filter((enemy) => !enemy.dead);
   if (!liveEnemies.length) {
-    setToast('No enemies to freeze');
+    setToast('No enemies for chain');
     return false;
   }
 
-  for (const enemy of liveEnemies) {
-    enemy.frozenFor = Math.max(enemy.frozenFor, 2.0);
+  const damage = clamp(Number(spell?.numbers?.damage || 34), 8, 120);
+  const chainCount = clamp(Math.floor(Number(spell?.numbers?.chainCount || 3)), 2, 7);
+  const effects = Array.isArray(spell?.effects) ? spell.effects : [];
+  const sorted = [...liveEnemies].sort((a, b) => b.mesh.position.z - a.mesh.position.z).slice(0, chainCount);
+  for (let i = 0; i < sorted.length; i += 1) {
+    const enemy = sorted[i];
+    spawnZap(enemy.mesh.position, spell?.element);
+    const falloff = 1 - i * 0.12;
+    damageEnemy(enemy, damage * falloff);
+    applyImpactEffects(enemy, effects, spell?.element, 0.85);
   }
 
   return true;
 }
 
-function castBolt() {
-  const liveEnemies = enemies.filter((enemy) => !enemy.dead);
-  if (!liveEnemies.length) {
-    setToast('No enemies for bolt');
-    return false;
+function chooseLaneForZone(targeting) {
+  if (targeting?.mode === 'lane' && Number.isFinite(targeting.lane)) {
+    return clamp(Math.round(targeting.lane), 0, LANE_COUNT - 1);
   }
-
-  const sorted = [...liveEnemies].sort((a, b) => b.mesh.position.z - a.mesh.position.z).slice(0, 4);
-  for (const enemy of sorted) {
-    spawnZap(enemy.mesh.position);
-    damageEnemy(enemy, 42);
+  if (targeting?.mode === 'front_cluster') {
+    const front = [...enemies].filter((enemy) => !enemy.dead).sort((a, b) => b.mesh.position.z - a.mesh.position.z)[0];
+    if (front) return front.lane;
   }
+  return lanePressure()[0].lane;
+}
 
-  return true;
+function zoneZForTargeting(targeting) {
+  if (targeting?.mode === 'front_cluster') {
+    const front = [...enemies].filter((enemy) => !enemy.dead).sort((a, b) => b.mesh.position.z - a.mesh.position.z)[0];
+    if (front) return front.mesh.position.z;
+  }
+  return Math.max(BASE_Z - 28, Math.min(BASE_Z - 9, commander.mesh.position.z - 8));
+}
+
+function selectTarget(targeting) {
+  if (targeting?.mode === 'lane' && Number.isFinite(targeting.lane)) {
+    const lane = clamp(Math.round(targeting.lane), 0, LANE_COUNT - 1);
+    const laneEnemies = enemies.filter((enemy) => !enemy.dead && enemy.lane === lane);
+    if (laneEnemies.length) {
+      return laneEnemies.sort((a, b) => a.mesh.position.distanceToSquared(commander.mesh.position) - b.mesh.position.distanceToSquared(commander.mesh.position))[0];
+    }
+  }
+  if (targeting?.mode === 'front_cluster') {
+    const front = [...enemies].filter((enemy) => !enemy.dead).sort((a, b) => b.mesh.position.z - a.mesh.position.z)[0];
+    if (front) return front;
+  }
+  return nearestEnemy();
 }
 
 function nearestEnemy() {
@@ -549,10 +774,11 @@ function lanePressure() {
   return summary.sort((a, b) => b.value - a.value);
 }
 
-function spawnZap(pos) {
+function spawnZap(pos, element = 'storm') {
+  const palette = colorForElement(element);
   const bolt = new THREE.Mesh(
     new THREE.CylinderGeometry(0.15, 0.15, 5, 6),
-    new THREE.MeshStandardMaterial({ color: 0xa8eeff, emissive: 0x53b7ff, emissiveIntensity: 1.0 })
+    new THREE.MeshStandardMaterial({ color: palette.base, emissive: palette.emissive, emissiveIntensity: 1.0 })
   );
   bolt.position.set(pos.x, 2.6, pos.z);
   scene.add(bolt);
@@ -644,6 +870,22 @@ function updateEnemies(dt) {
     if (enemy.frozenFor > 0) {
       enemy.frozenFor = Math.max(0, enemy.frozenFor - dt);
     }
+    if (enemy.slowFor > 0) {
+      enemy.slowFor = Math.max(0, enemy.slowFor - dt);
+      if (enemy.slowFor === 0) {
+        enemy.slowFactor = 1;
+      }
+    }
+    if (enemy.stunnedFor > 0) {
+      enemy.stunnedFor = Math.max(0, enemy.stunnedFor - dt);
+    }
+    if (enemy.burningFor > 0) {
+      enemy.burningFor = Math.max(0, enemy.burningFor - dt);
+      damageEnemy(enemy, enemy.burnDps * dt);
+      if (enemy.burningFor === 0) {
+        enemy.burnDps = 0;
+      }
+    }
 
     if (enemy.hitTimer > 0) {
       enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
@@ -652,7 +894,7 @@ function updateEnemies(dt) {
       }
     }
 
-    const moveScale = enemy.frozenFor > 0 ? 0.15 : 1;
+    const moveScale = enemy.stunnedFor > 0 ? 0 : enemy.frozenFor > 0 ? 0.15 : enemy.slowFactor;
     enemy.visual.playbackScale = moveScale;
 
     let blocked = false;
@@ -761,13 +1003,16 @@ function explodeProjectile(projectile) {
     const d = enemy.mesh.position.distanceTo(point);
     if (d <= projectile.splash) {
       const falloff = 1 - d / projectile.splash;
-      damageEnemy(enemy, projectile.damage * (0.4 + falloff * 0.6));
+      const dealt = projectile.damage * (0.4 + falloff * 0.6);
+      damageEnemy(enemy, dealt);
+      applyImpactEffects(enemy, projectile.effects, projectile.element, projectile.intensity || 0.8);
     }
   }
 
+  const elementColor = colorForElement(projectile.element || 'fire');
   const fx = new THREE.Mesh(
     new THREE.SphereGeometry(0.7, 8, 8),
-    new THREE.MeshStandardMaterial({ color: 0xffb172, emissive: 0xff6a00, emissiveIntensity: 1 })
+    new THREE.MeshStandardMaterial({ color: elementColor.base, emissive: elementColor.emissive, emissiveIntensity: 1 })
   );
   fx.position.copy(point);
   scene.add(fx);
@@ -786,6 +1031,48 @@ function damageEnemy(enemy, amount) {
   }
 }
 
+function applyImpactEffects(enemy, effects, element, intensity = 0.8) {
+  if (!Array.isArray(effects) || !effects.length || enemy.dead) {
+    return;
+  }
+
+  if (effects.includes('burn')) {
+    enemy.burningFor = Math.max(enemy.burningFor, 2.2 * intensity);
+    enemy.burnDps = Math.max(enemy.burnDps, 4 + 8 * intensity);
+  }
+
+  if (effects.includes('freeze')) {
+    enemy.frozenFor = Math.max(enemy.frozenFor, 1.4 * intensity + 0.4);
+  }
+
+  if (effects.includes('stun')) {
+    enemy.stunnedFor = Math.max(enemy.stunnedFor, 0.45 + intensity * 0.35);
+  }
+
+  if (effects.includes('slow')) {
+    enemy.slowFor = Math.max(enemy.slowFor, 1.8 * intensity + 0.5);
+    enemy.slowFactor = Math.min(enemy.slowFactor, 0.55);
+  }
+
+  if (effects.includes('knockback')) {
+    enemy.mesh.position.z = Math.max(START_Z + 2, enemy.mesh.position.z - (0.6 + intensity * 1.2));
+  }
+
+  if (effects.includes('shield_break') && enemy.kind === 'tank') {
+    damageEnemy(enemy, 5 + intensity * 7);
+  }
+
+  void element;
+}
+
+function colorForElement(element) {
+  if (element === 'fire') return { base: 0xff8840, emissive: 0x8c2b00 };
+  if (element === 'ice') return { base: 0x98d8ff, emissive: 0x246ca9 };
+  if (element === 'storm') return { base: 0xa8eeff, emissive: 0x53b7ff };
+  if (element === 'earth') return { base: 0x96ac75, emissive: 0x40542a };
+  return { base: 0xc59dff, emissive: 0x5d2e8a };
+}
+
 function updateWalls(dt) {
   for (let i = walls.length - 1; i >= 0; i -= 1) {
     const wall = walls[i];
@@ -796,7 +1083,43 @@ function updateWalls(dt) {
       continue;
     }
 
-    wall.mesh.scale.y = 0.72 + (wall.hp / 140) * 0.28;
+    wall.mesh.scale.y = 0.72 + (wall.hp / wall.maxHp) * 0.28;
+  }
+}
+
+function updateZones(dt) {
+  for (let i = zones.length - 1; i >= 0; i -= 1) {
+    const zone = zones[i];
+    if (zone.isLinkedWall && !walls.some((wall) => wall.mesh === zone.mesh)) {
+      zones.splice(i, 1);
+      continue;
+    }
+    zone.duration -= dt;
+    zone.timer += dt;
+    if (!zone.isLinkedWall) {
+      zone.mesh.rotation.y += dt * 0.8;
+      zone.mesh.material.opacity = clamp(0.25 + (zone.duration / 6) * 0.45, 0.2, 0.72);
+    }
+
+    if (zone.timer >= zone.tickRate) {
+      zone.timer = 0;
+      for (const enemy of enemies) {
+        if (enemy.dead) continue;
+        const inLane = enemy.lane === zone.lane;
+        const inZ = Math.abs(enemy.mesh.position.z - zone.z) <= zone.radius;
+        if (inLane && inZ) {
+          damageEnemy(enemy, zone.damage * zone.tickRate);
+          applyImpactEffects(enemy, zone.effects, 'arcane', 0.7);
+        }
+      }
+    }
+
+    if (zone.duration <= 0) {
+      if (!zone.isLinkedWall) {
+        scene.remove(zone.mesh);
+      }
+      zones.splice(i, 1);
+    }
   }
 }
 
@@ -804,7 +1127,7 @@ function updateResources(dt) {
   GAME.mana = clamp(GAME.mana + GAME.manaRegen * dt, 0, GAME.maxMana);
   GAME.globalCooldown = Math.max(0, GAME.globalCooldown - dt);
 
-  for (const key of Object.keys(SPELLS)) {
+  for (const key of spellCooldowns.keys()) {
     const left = Math.max(0, (spellCooldowns.get(key) || 0) - dt);
     spellCooldowns.set(key, left);
   }
@@ -852,6 +1175,7 @@ function animate() {
     updateSpawning(dt);
     updateResources(dt);
     updateWalls(dt);
+    updateZones(dt);
     updateEnemies(dt);
     updateProjectiles(dt);
     updateHud();
