@@ -17,7 +17,7 @@ You still have classic spell casting, but prompts now target broader game layers
   - per-tick command budget
   - per-mechanic runtime budget
   - auto-disable on errors/budget violations
-- Enemy visuals were upgraded to sprite-based 3D billboard enemies with class variants.
+- Enemy visuals now use an animated FBX goblin pipeline (Mixamo walk) with texture-based materials.
 
 ## Gameplay baseline
 
@@ -63,6 +63,28 @@ OPENAI_API_KEY=sk-...
 - `src/runtime/mechanicRuntime.js`: bounded, telemetry-aware mechanic execution
 - `src/enemy-models.js`: enemy visual loading/animation integration
 - `docs/architecture/dynamic-sandbox-runtime-plan.md`: forward plan for sandbox hardening
+
+## Enemy visual setup (FBX)
+
+Current defaults use:
+- `public/models/enemies/goblin-walk/Walking.fbx`
+- `public/models/enemies/goblin-walk/textures/*`
+
+`public/models/enemies/manifest.json` controls per-kind settings:
+- `kind`: `melee`, `ranged`, `tank`
+- `path`: animated FBX path
+- `scale`: per-kind scale
+- `yOffset`: vertical offset
+- `castsShadow`: shadow toggle
+
+Runtime animation states expected by game logic:
+- `idle`
+- `run`
+- `attack`
+- `hit`
+- `die`
+
+If a clip is missing (for example no `attack` clip), the loader falls back to compatible clips (usually `run`).
 
 ## Tests
 

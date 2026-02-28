@@ -1,60 +1,57 @@
 import * as THREE from 'three';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 const DEFAULT_MANIFEST = [
   {
     kind: 'melee',
-    path: '/models/enemies/goblin.glb',
-    scale: 1.1,
-    yOffset: 0.02,
+    path: '/models/enemies/goblin-walk/Walking.fbx',
+    scale: 0.012,
+    yOffset: 0,
     castsShadow: true,
   },
   {
     kind: 'ranged',
-    path: '/models/enemies/archer_goblin.glb',
-    scale: 1.05,
-    yOffset: 0.02,
+    path: '/models/enemies/goblin-walk/Walking.fbx',
+    scale: 0.011,
+    yOffset: 0,
     castsShadow: false,
   },
   {
     kind: 'tank',
-    path: '/models/enemies/ogre.glb',
-    scale: 1.28,
-    yOffset: 0.03,
+    path: '/models/enemies/goblin-walk/Walking.fbx',
+    scale: 0.015,
+    yOffset: 0,
     castsShadow: true,
   },
 ];
-
-const VISUAL_STYLE = {
-  melee: {
-    skinA: '#8da974',
-    skinB: '#60794c',
-    clothA: '#5a4a3f',
-    clothB: '#362d27',
-    metal: '#b9c3cf',
-    glow: '#f3cf8f',
-  },
-  ranged: {
-    skinA: '#9f8f77',
-    skinB: '#6f6151',
-    clothA: '#6f7f98',
-    clothB: '#48556d',
-    metal: '#c3cad6',
-    glow: '#89c3ff',
-  },
-  tank: {
-    skinA: '#9f9c83',
-    skinB: '#72705e',
-    clothA: '#555647',
-    clothB: '#303227',
-    metal: '#9da5ae',
-    glow: '#e7a974',
-  },
-};
 
 const FALLBACK_LOOK = {
   melee: { size: 1.7, color: 0x6f8062 },
   ranged: { size: 1.45, color: 0x7a4963 },
   tank: { size: 2.4, color: 0x49566f },
+};
+
+const KIND_TINT = {
+  melee: 0xffffff,
+  ranged: 0xcfdcff,
+  tank: 0xe6dfcf,
+};
+
+const textureUrls = {
+  map: '/models/enemies/goblin-walk/textures/Goblin_Base_color.png',
+  normalMap: '/models/enemies/goblin-walk/textures/Goblin_Normal_OpenGL.png',
+  roughnessMap: '/models/enemies/goblin-walk/textures/Goblin_Roughness.png',
+  metalnessMap: '/models/enemies/goblin-walk/textures/Goblin_Metallic.png',
+  aoMap: '/models/enemies/goblin-walk/textures/Goblin_Mixed_AO.png',
+};
+
+const stateAliases = {
+  idle: ['idle'],
+  run: ['run', 'walk', 'locomotion', 'moving'],
+  attack: ['attack', 'strike', 'slash', 'punch', 'run', 'walk'],
+  hit: ['hit', 'hurt', 'impact', 'damage'],
+  die: ['die', 'death', 'dead', 'knockout'],
 };
 
 const registry = new Map();
@@ -67,11 +64,11 @@ export async function loadEnemyModels(scene) {
     return loadPromise;
   }
 
-  loadPromise = internalLoadEnemyVisuals();
+  loadPromise = internalLoadEnemyModels();
   return loadPromise;
 }
 
-async function internalLoadEnemyVisuals() {
+async function internalLoadEnemyModels() {
   const manifest = await loadManifest();
   const byKind = new Map(DEFAULT_MANIFEST.map((entry) => [entry.kind, { ...entry }]));
 
@@ -81,12 +78,23 @@ async function internalLoadEnemyVisuals() {
     }
   }
 
+  const texturePack = await loadTexturePack();
+  const loader = new FBXLoader();
+  const byPath = new Map();
+
   for (const [kind, entry] of byKind) {
+    let shared = byPath.get(entry.path);
+    if (!shared) {
+      shared = await loadPathTemplate(loader, entry.path, texturePack);
+      byPath.set(entry.path, shared);
+    }
+
     registry.set(kind, {
       kind,
       entry,
-      texture: createEnemySpriteTexture(kind),
-      failed: false,
+      failed: shared.failed,
+      templateRoot: shared.templateRoot,
+      clips: shared.clips,
     });
   }
 }
@@ -110,425 +118,292 @@ async function loadManifest() {
   }
 }
 
-function createEnemySpriteTexture(kind) {
-  const style = VISUAL_STYLE[kind] || VISUAL_STYLE.melee;
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 512;
+async function loadPathTemplate(loader, path, texturePack) {
+  try {
+    const root = await loader.loadAsync(path);
+    const clips = root.animations || [];
 
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    return null;
-  }
+    normalizeRootToGround(root);
+    root.updateMatrixWorld(true);
+    prepareTemplateMaterials(root, texturePack);
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  const bgGlow = ctx.createRadialGradient(256, 318, 35, 256, 318, 190);
-  bgGlow.addColorStop(0, rgbaHex(style.glow, 0.26));
-  bgGlow.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = bgGlow;
-  ctx.beginPath();
-  ctx.arc(256, 318, 200, 0, Math.PI * 2);
-  ctx.fill();
-
-  drawFeetShadow(ctx);
-  drawEnemyBody(ctx, kind, style);
-  addPaintGrain(ctx, 1300);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  texture.generateMipmaps = true;
-  texture.needsUpdate = true;
-
-  return texture;
-}
-
-function drawFeetShadow(ctx) {
-  const shadow = ctx.createRadialGradient(256, 454, 30, 256, 454, 110);
-  shadow.addColorStop(0, 'rgba(0, 0, 0, 0.34)');
-  shadow.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = shadow;
-  ctx.beginPath();
-  ctx.ellipse(256, 454, 120, 38, 0, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawEnemyBody(ctx, kind, style) {
-  const x = 256;
-
-  drawLegs(ctx, x, kind, style);
-  drawTorso(ctx, x, kind, style);
-  drawHead(ctx, x, kind, style);
-
-  if (kind === 'ranged') {
-    drawBow(ctx, x, style);
-  }
-
-  if (kind === 'melee') {
-    drawClub(ctx, x, style);
-  }
-
-  if (kind === 'tank') {
-    drawMace(ctx, x, style);
-  }
-
-  drawEyes(ctx, x, kind);
-}
-
-function drawLegs(ctx, x, kind, style) {
-  const width = kind === 'tank' ? 118 : 78;
-  const height = kind === 'tank' ? 114 : 88;
-  const y = kind === 'tank' ? 390 : 398;
-
-  const grad = ctx.createLinearGradient(0, y - height * 0.5, 0, y + height * 0.5);
-  grad.addColorStop(0, style.clothA);
-  grad.addColorStop(1, style.clothB);
-
-  roundedRect(ctx, x - width / 2, y - height / 2, width, height, 18, grad);
-}
-
-function drawTorso(ctx, x, kind, style) {
-  const width = kind === 'tank' ? 172 : 116;
-  const height = kind === 'tank' ? 178 : 136;
-  const y = kind === 'tank' ? 286 : 304;
-
-  const torsoGrad = ctx.createLinearGradient(0, y - height * 0.5, 0, y + height * 0.5);
-  torsoGrad.addColorStop(0, style.skinA);
-  torsoGrad.addColorStop(1, style.skinB);
-
-  roundedRect(ctx, x - width / 2, y - height / 2, width, height, 28, torsoGrad);
-
-  const armorGrad = ctx.createLinearGradient(0, y - 20, 0, y + 58);
-  armorGrad.addColorStop(0, rgbaHex(style.metal, 0.55));
-  armorGrad.addColorStop(1, rgbaHex(style.metal, 0.15));
-  roundedRect(ctx, x - width * 0.28, y - 15, width * 0.56, height * 0.42, 14, armorGrad);
-}
-
-function drawHead(ctx, x, kind, style) {
-  const w = kind === 'tank' ? 138 : 98;
-  const h = kind === 'tank' ? 118 : 86;
-  const y = kind === 'tank' ? 185 : 214;
-
-  const grad = ctx.createLinearGradient(0, y - h * 0.6, 0, y + h * 0.6);
-  grad.addColorStop(0, brightenHex(style.skinA, 0.18));
-  grad.addColorStop(1, style.skinB);
-
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.ellipse(x, y, w * 0.5, h * 0.5, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  if (kind === 'melee') {
-    drawEar(ctx, x - 52, y - 8, -1, style.skinA);
-    drawEar(ctx, x + 52, y - 8, 1, style.skinA);
-  }
-
-  if (kind === 'ranged') {
-    ctx.fillStyle = rgbaHex(style.clothB, 0.92);
-    ctx.beginPath();
-    ctx.ellipse(x, y - 12, w * 0.62, h * 0.53, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  if (kind === 'tank') {
-    ctx.fillStyle = rgbaHex('#2f2f2f', 0.28);
-    ctx.beginPath();
-    ctx.ellipse(x, y + 18, w * 0.28, h * 0.18, 0, 0, Math.PI);
-    ctx.fill();
+    return {
+      failed: false,
+      templateRoot: root,
+      clips,
+    };
+  } catch (error) {
+    console.warn(`[enemy-models] Could not load ${path}. Falling back to box mesh.`, error);
+    return {
+      failed: true,
+      templateRoot: null,
+      clips: [],
+    };
   }
 }
 
-function drawEar(ctx, x, y, dir, color) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(0.42 * dir);
-  ctx.fillStyle = brightenHex(color, 0.12);
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(18 * dir, -6);
-  ctx.lineTo(13 * dir, 16);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
-function drawEyes(ctx, x, kind) {
-  const y = kind === 'tank' ? 185 : 216;
-  const dist = kind === 'tank' ? 25 : 18;
-  const eyeColor = kind === 'ranged' ? '#90d0ff' : '#f6cf62';
-
-  ctx.fillStyle = eyeColor;
-  ctx.beginPath();
-  ctx.arc(x - dist, y, 4.2, 0, Math.PI * 2);
-  ctx.arc(x + dist, y, 4.2, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = 'rgba(0,0,0,0.36)';
-  ctx.beginPath();
-  ctx.arc(x - dist + 1, y + 1, 1.8, 0, Math.PI * 2);
-  ctx.arc(x + dist + 1, y + 1, 1.8, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawClub(ctx, x, style) {
-  ctx.save();
-  ctx.translate(x + 108, 300);
-  ctx.rotate(-0.62);
-  roundedRect(ctx, -8, -35, 16, 98, 7, '#6d5239');
-  roundedRect(ctx, -17, -52, 34, 24, 10, rgbaHex(style.metal, 0.82));
-  ctx.restore();
-}
-
-function drawBow(ctx, x, style) {
-  ctx.save();
-  ctx.translate(x + 104, 304);
-  ctx.rotate(-0.16);
-  ctx.strokeStyle = '#735739';
-  ctx.lineWidth = 8;
-  ctx.beginPath();
-  ctx.arc(0, 0, 48, -Math.PI * 0.46, Math.PI * 0.46);
-  ctx.stroke();
-
-  ctx.strokeStyle = rgbaHex(style.metal, 0.65);
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(34, -22);
-  ctx.lineTo(34, 22);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawMace(ctx, x, style) {
-  ctx.save();
-  ctx.translate(x + 140, 294);
-  ctx.rotate(-0.42);
-  roundedRect(ctx, -8, -42, 16, 112, 7, '#53402f');
-  ctx.fillStyle = rgbaHex(style.metal, 0.9);
-  ctx.beginPath();
-  ctx.arc(0, -57, 21, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-function addPaintGrain(ctx, points) {
-  for (let i = 0; i < points; i += 1) {
-    const x = Math.random() * 512;
-    const y = Math.random() * 512;
-    const alpha = Math.random() * 0.05;
-    ctx.fillStyle = `rgba(0,0,0,${alpha})`;
-    ctx.fillRect(x, y, 1, 1);
+function normalizeRootToGround(root) {
+  const box = new THREE.Box3().setFromObject(root);
+  if (!Number.isFinite(box.min.y)) {
+    return;
   }
+
+  root.position.y += -box.min.y;
 }
 
-function roundedRect(ctx, x, y, width, height, radius, fillStyle) {
-  const r = Math.min(radius, width * 0.5, height * 0.5);
-  ctx.fillStyle = fillStyle;
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + width - r, y);
-  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
-  ctx.lineTo(x + width, y + height - r);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
-  ctx.lineTo(x + r, y + height);
-  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-  ctx.fill();
+function prepareTemplateMaterials(root, texturePack) {
+  root.traverse((child) => {
+    if (!child.isMesh) {
+      return;
+    }
+
+    child.castShadow = true;
+    child.receiveShadow = false;
+    child.frustumCulled = true;
+
+    if (child.geometry?.attributes?.uv && !child.geometry.attributes.uv2) {
+      child.geometry.setAttribute('uv2', child.geometry.attributes.uv);
+    }
+
+    child.material = buildStandardMaterial(texturePack);
+  });
 }
 
-function brightenHex(hex, amount) {
-  const { r, g, b } = parseHex(hex);
-  const blend = (v) => Math.round(v + (255 - v) * amount);
-  return `rgb(${blend(r)}, ${blend(g)}, ${blend(b)})`;
+function buildStandardMaterial(texturePack) {
+  const material = new THREE.MeshStandardMaterial({
+    map: texturePack.map || null,
+    normalMap: texturePack.normalMap || null,
+    roughnessMap: texturePack.roughnessMap || null,
+    metalnessMap: texturePack.metalnessMap || null,
+    aoMap: texturePack.aoMap || null,
+    color: 0xffffff,
+    roughness: texturePack.roughnessMap ? 1 : 0.82,
+    metalness: texturePack.metalnessMap ? 1 : 0.08,
+  });
+
+  material.needsUpdate = true;
+  return material;
 }
 
-function rgbaHex(hex, alpha) {
-  const { r, g, b } = parseHex(hex);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
+async function loadTexturePack() {
+  const loader = new THREE.TextureLoader();
 
-function parseHex(hex) {
-  const clean = hex.replace('#', '');
-  const value = clean.length === 3
-    ? clean.split('').map((ch) => ch + ch).join('')
-    : clean;
+  const entries = await Promise.all(
+    Object.entries(textureUrls).map(async ([key, url]) => {
+      try {
+        const texture = await loader.loadAsync(url);
+        texture.needsUpdate = true;
 
-  const int = Number.parseInt(value, 16);
-  return {
-    r: (int >> 16) & 255,
-    g: (int >> 8) & 255,
-    b: int & 255,
-  };
+        if (key === 'map') {
+          texture.colorSpace = THREE.SRGBColorSpace;
+        }
+
+        return [key, texture];
+      } catch (error) {
+        console.warn(`[enemy-models] Missing texture ${url}`, error);
+        return [key, null];
+      }
+    })
+  );
+
+  return Object.fromEntries(entries);
 }
 
 export function spawnEnemyVisual(kind, lane, position) {
   void lane;
 
   const record = registry.get(kind);
-  if (!record || !record.texture || record.failed) {
+  if (!record || record.failed || !record.templateRoot) {
     return buildFallbackVisual(kind, position);
   }
 
-  const entry = record.entry;
-  const baseHeight = (entry.scale || 1) * (kind === 'tank' ? 6.6 : kind === 'ranged' ? 5.2 : 5.7);
-  const baseWidth = baseHeight * (kind === 'tank' ? 0.72 : 0.64);
+  const clone = SkeletonUtils.clone(record.templateRoot);
+  clone.traverse((child) => {
+    if (!child.isMesh) {
+      return;
+    }
 
-  const material = new THREE.SpriteMaterial({
-    map: record.texture,
-    transparent: true,
-    alphaTest: 0.03,
-    depthWrite: false,
-    color: new THREE.Color(1, 1, 1),
+    child.material = cloneMaterialWithTint(child.material, KIND_TINT[kind] || 0xffffff);
+    child.castShadow = Boolean(record.entry.castsShadow);
+    child.receiveShadow = false;
   });
-
-  const sprite = new THREE.Sprite(material);
-  sprite.center.set(0.5, 0);
-  sprite.scale.set(baseWidth, baseHeight, 1);
-  sprite.position.set(0, entry.yOffset || 0, 0);
 
   const group = new THREE.Group();
   group.position.copy(position);
-  group.add(sprite);
+  group.scale.setScalar(record.entry.scale || 1);
+  clone.position.y += record.entry.yOffset || 0;
+  group.add(clone);
 
-  const shadow = createGroundShadow(baseWidth, entry.castsShadow !== false);
-  if (shadow) {
-    group.add(shadow);
-  }
+  const mixer = record.clips.length ? new THREE.AnimationMixer(clone) : null;
+  const actions = mixer ? buildActions(mixer, record.clips) : {};
 
   return {
     group,
-    root: sprite,
-    mixer: null,
-    actions: {},
+    root: clone,
+    mixer,
+    actions,
     activeAction: null,
     state: 'idle',
     playbackScale: 1,
     isFallback: false,
-    _shadow: shadow,
-    _anim: {
-      t: Math.random() * 3,
-      hitLeft: 0,
-      dieT: 0,
-      baseY: entry.yOffset || 0,
-      baseW: baseWidth,
-      baseH: baseHeight,
-    },
     update(dt) {
-      updateSpriteEnemy(this, dt);
+      if (this.mixer) {
+        this.mixer.timeScale = this.playbackScale;
+        this.mixer.update(dt);
+      }
     },
   };
 }
 
-function createGroundShadow(width, enabled) {
-  if (!enabled) {
-    return null;
+function cloneMaterialWithTint(material, tintHex) {
+  const tint = new THREE.Color(tintHex);
+
+  if (Array.isArray(material)) {
+    return material.map((entry) => cloneOneMaterial(entry, tint));
   }
 
-  const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(width * 0.34, 14),
-    new THREE.MeshBasicMaterial({
-      color: 0x000000,
-      transparent: true,
-      opacity: 0.28,
-      depthWrite: false,
-    })
-  );
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.01;
-
-  return shadow;
+  return cloneOneMaterial(material, tint);
 }
 
-function updateSpriteEnemy(enemyVisual, dt) {
-  const sprite = enemyVisual.root;
-  const anim = enemyVisual._anim;
-
-  anim.t += dt * Math.max(0.18, enemyVisual.playbackScale);
-
-  let bob = 0;
-  let sway = 0;
-  let scaleY = 1;
-  let scaleX = 1;
-
-  if (enemyVisual.state === 'run') {
-    bob = Math.sin(anim.t * 8.5) * 0.11;
-    sway = Math.sin(anim.t * 6.1) * 0.05;
-    scaleY = 0.98 + Math.sin(anim.t * 8.5) * 0.04;
-    scaleX = 1.01 - Math.sin(anim.t * 8.5) * 0.03;
-  } else if (enemyVisual.state === 'attack') {
-    // Punchy, short cycle that reads as striking the wall in sprite mode.
-    bob = Math.sin(anim.t * 12.5) * 0.07;
-    sway = Math.sin(anim.t * 15.0) * 0.12;
-    scaleY = 1.0 + Math.max(0, Math.sin(anim.t * 12.5)) * 0.08;
-    scaleX = 1.0 - Math.max(0, Math.sin(anim.t * 12.5)) * 0.05;
-  } else if (enemyVisual.state === 'hit') {
-    anim.hitLeft = Math.max(0, anim.hitLeft - dt);
-    bob = 0.04;
-    sway = Math.sin(anim.t * 36) * 0.06;
-    const pulse = 0.72 + Math.sin(anim.t * 42) * 0.28;
-    sprite.material.color.setRGB(1, pulse, pulse);
-  } else if (enemyVisual.state === 'die') {
-    anim.dieT = Math.min(1, anim.dieT + dt / 0.45);
-    bob = -0.1 * anim.dieT;
-    sway = anim.dieT * 0.45;
-    scaleY = 1 - anim.dieT * 0.62;
-    scaleX = 1 + anim.dieT * 0.16;
-    sprite.material.opacity = 1 - anim.dieT * 0.45;
-  } else {
-    bob = Math.sin(anim.t * 2.1) * 0.04;
-    sway = Math.sin(anim.t * 1.5) * 0.02;
+function cloneOneMaterial(material, tint) {
+  if (!material) {
+    const fallback = new THREE.MeshStandardMaterial({ color: tint.clone() });
+    fallback.userData.enemyInstanceMaterial = true;
+    return fallback;
   }
 
-  if (enemyVisual.state !== 'hit') {
-    sprite.material.color.setRGB(1, 1, 1);
+  const cloned = material.clone();
+  if (cloned.color) {
+    cloned.color.multiply(tint);
+  }
+  cloned.userData.enemyInstanceMaterial = true;
+  return cloned;
+}
+
+function buildActions(mixer, clips) {
+  const actions = {};
+  for (const clip of clips) {
+    const sanitized = sanitizeClipForInPlaceMotion(clip);
+    const key = normalize(sanitized.name);
+    actions[key] = mixer.clipAction(sanitized);
   }
 
-  sprite.position.y = anim.baseY + bob;
-  sprite.material.rotation = sway;
-  sprite.scale.set(anim.baseW * scaleX, anim.baseH * scaleY, 1);
+  return actions;
+}
 
-  if (enemyVisual._shadow) {
-    const shadowScale = 1 - bob * 0.35;
-    enemyVisual._shadow.scale.set(shadowScale, shadowScale, shadowScale);
-    enemyVisual._shadow.material.opacity = 0.22 + (1 - anim.dieT) * 0.08;
+function sanitizeClipForInPlaceMotion(clip) {
+  const cloned = clip.clone();
+  for (const track of cloned.tracks) {
+    if (!track.name.endsWith('.position')) {
+      continue;
+    }
+
+    if (track.getValueSize() !== 3) {
+      continue;
+    }
+
+    // Remove lateral root-motion drift so gameplay movement controls world translation.
+    const values = track.values;
+    const baseX = values[0];
+    const baseZ = values[2];
+    for (let i = 0; i < values.length; i += 3) {
+      values[i] = baseX;
+      values[i + 2] = baseZ;
+    }
   }
+
+  return cloned;
+}
+
+function normalize(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function resolveAction(enemyVisual, state) {
+  const aliases = stateAliases[state] || [state];
+
+  for (const alias of aliases) {
+    const key = normalize(alias);
+    if (enemyVisual.actions[key]) {
+      return enemyVisual.actions[key];
+    }
+  }
+
+  // Fallbacks keep combat readable even when some clips are missing.
+  if (state === 'run' || state === 'idle' || state === 'attack') {
+    const runAction = enemyVisual.actions[normalize('run')] || enemyVisual.actions[normalize('walk')];
+    if (runAction) {
+      return runAction;
+    }
+  }
+
+  const keys = Object.keys(enemyVisual.actions);
+  if (keys.length) {
+    return enemyVisual.actions[keys[0]];
+  }
+
+  return null;
 }
 
 export function setEnemyAnim(enemyVisual, state) {
-  enemyVisual.state = state;
-
-  if (enemyVisual.isFallback) {
+  if (enemyVisual.isFallback || !enemyVisual.mixer) {
+    enemyVisual.state = state;
     return;
   }
 
-  if (state === 'hit') {
-    enemyVisual._anim.hitLeft = 0.12;
+  const next = resolveAction(enemyVisual, state);
+  if (!next) {
+    enemyVisual.state = state;
+    return;
   }
 
-  if (state === 'die') {
-    enemyVisual._anim.dieT = 0;
+  const prev = enemyVisual.activeAction;
+  const oneShot = state === 'hit' || state === 'die';
+  const sameState = enemyVisual.state === state;
+
+  // Avoid restarting looping clips (run/attack/idle) every frame.
+  if (!oneShot && sameState && prev === next && next.isRunning()) {
+    return;
   }
 
-  if (state === 'run' || state === 'idle' || state === 'attack') {
-    enemyVisual.root.material.opacity = 1;
-    enemyVisual.root.material.color.setRGB(1, 1, 1);
+  enemyVisual.state = state;
+
+  next.reset();
+  next.enabled = true;
+  next.clampWhenFinished = oneShot;
+  next.setLoop(oneShot ? THREE.LoopOnce : THREE.LoopRepeat, oneShot ? 1 : Infinity);
+
+  if (prev && prev !== next) {
+    next.crossFadeFrom(prev, state === 'hit' ? 0.06 : 0.12, true);
   }
+
+  next.play();
+  enemyVisual.activeAction = next;
 }
 
 export function disposeEnemyVisual(enemyVisual) {
-  if (enemyVisual.root?.material) {
-    enemyVisual.root.material.dispose();
+  if (enemyVisual.mixer) {
+    enemyVisual.mixer.stopAllAction();
+    if (enemyVisual.root) {
+      enemyVisual.mixer.uncacheRoot(enemyVisual.root);
+    }
   }
 
-  if (enemyVisual._shadow?.material) {
-    enemyVisual._shadow.material.dispose();
-  }
+  if (enemyVisual.group) {
+    enemyVisual.group.traverse((child) => {
+      if (!child.isMesh) {
+        return;
+      }
 
-  if (enemyVisual._shadow?.geometry) {
-    enemyVisual._shadow.geometry.dispose();
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) {
+        if (material?.userData?.enemyInstanceMaterial) {
+          material.dispose();
+        }
+      }
+    });
   }
 
   if (enemyVisual.group?.parent) {

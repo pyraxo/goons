@@ -1,22 +1,22 @@
 [
   {
     "kind": "melee",
-    "path": "/models/enemies/goblin.glb",
-    "scale": 1.1,
+    "path": "/models/enemies/goblin-walk/Walking.fbx",
+    "scale": 0.012,
     "yOffset": 0,
     "castsShadow": true
   },
   {
     "kind": "ranged",
-    "path": "/models/enemies/archer_goblin.glb",
-    "scale": 1.05,
+    "path": "/models/enemies/goblin-walk/Walking.fbx",
+    "scale": 0.011,
     "yOffset": 0,
     "castsShadow": false
   },
   {
     "kind": "tank",
-    "path": "/models/enemies/ogre.glb",
-    "scale": 1.35,
+    "path": "/models/enemies/goblin-walk/Walking.fbx",
+    "scale": 0.015,
     "yOffset": 0,
     "castsShadow": true
   }
