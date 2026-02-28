@@ -22,6 +22,7 @@
       <span id="loopStatus" class="status-ok">Loop: Running</span>
       <span id="queueStatus">Queue: 0</span>
       <span id="applyStatus">No prompt applied yet</span>
+      <button id="resetSandboxBtn" type="button">Reset Sandbox</button>
     </div>
 
     <div id="commandWrap" class="hidden">
@@ -40,11 +41,6 @@
 
     <div id="promptBar">
       <textarea id="promptInput" placeholder="Type prompt: e.g. summon 3 shield bearers with taunt"></textarea>
-      <select id="modelPreset" aria-label="Model preset">
-        <option value="fast">Preset: Fast</option>
-        <option value="medium">Preset: Medium</option>
-        <option value="high">Preset: High</option>
-      </select>
       <button id="estimateBtn" type="button">Estimate</button>
       <button id="applyBtn" type="button" disabled>Apply</button>
     </div>
