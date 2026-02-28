@@ -3,10 +3,13 @@ const ELEMENTS = ['fire', 'ice', 'arcane', 'earth', 'storm'];
 const TARGET_MODES = ['nearest', 'nearest_enemy', 'lane', 'lane_cluster', 'ground_point', 'front_cluster', 'commander_facing'];
 const TARGET_PATTERNS = ['single_enemy', 'lane_circle', 'lane_sweep', 'ground_strike', 'line_from_caster'];
 const EFFECTS = ['burn', 'freeze', 'stun', 'knockback', 'slow', 'shield_break'];
-const VFX_SHAPES = ['orb', 'ring', 'wall', 'arc', 'wave', 'pillar', 'beam'];
+const VFX_SHAPES = ['orb', 'ring', 'wall', 'arc', 'wave', 'pillar', 'beam', 'cone', 'helix', 'sphereburst', 'crystal'];
+const TRAIL_THEMES = ['torch', 'mist', 'glyph', 'sparks', 'stormthread', 'embers', 'glyphs', 'none'];
+const SFX_LAYERS = ['cast', 'sustain', 'impact', 'ambient'];
 const TRAIL_EFFECTS = ['spark', 'smoke', 'frost_mist', 'lightning_arc', 'ember_trail', 'shadow_wisp', 'holy_motes', 'none'];
 const IMPACT_EFFECTS = ['explosion', 'shatter', 'ripple', 'flash', 'vortex', 'pillar', 'none'];
 const CAST_STYLES = ['launch', 'slam', 'channel', 'sweep', 'pulse', 'smite', 'focus'];
+const HEX_PATTERN = '^#[0-9a-fA-F]{6}$';
 
 const EFFECT_WEIGHTS = {
   burn: 10,
@@ -170,18 +173,33 @@ const TOOL_SCHEMA = {
         palette: { type: 'string', minLength: 2, maxLength: 24 },
         intensity: { type: 'number', minimum: 0.2, maximum: 1.4 },
         shape: { type: 'string', enum: VFX_SHAPES },
+        secondaryShape: { type: 'string', enum: VFX_SHAPES },
+        shapeScale: { type: 'number', minimum: 0.5, maximum: 2.6 },
+        shapeBlend: { type: 'number', minimum: 0, maximum: 1 },
         size: { type: 'number', minimum: 0.4, maximum: 2.2 },
         ringColor: { type: 'string', minLength: 3, maxLength: 16 },
+        particleTheme: { type: 'string', enum: TRAIL_THEMES },
         visibility: { type: 'number', minimum: 0.4, maximum: 2.2 },
         primaryColor: {
           type: 'string',
-          pattern: '^#[0-9a-fA-F]{6}$',
+          pattern: HEX_PATTERN,
           description: 'Hex color for the main body of the spell (e.g. "#ff6622" for molten orange).',
         },
         secondaryColor: {
           type: 'string',
-          pattern: '^#[0-9a-fA-F]{6}$',
+          pattern: HEX_PATTERN,
           description: 'Hex accent color for glow, particles, and edges (e.g. "#ffcc00" for golden highlights).',
+        },
+        colors: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            core: { type: 'string', pattern: HEX_PATTERN },
+            accent: { type: 'string', pattern: HEX_PATTERN },
+            ring: { type: 'string', pattern: HEX_PATTERN },
+            glow: { type: 'string', pattern: HEX_PATTERN },
+            edge: { type: 'string', pattern: HEX_PATTERN },
+          },
         },
         trailEffect: {
           type: 'string',
@@ -213,6 +231,11 @@ const TOOL_SCHEMA = {
       required: ['cue'],
       properties: {
         cue: { type: 'string', minLength: 2, maxLength: 32 },
+        impactCue: { type: 'string', minLength: 2, maxLength: 32 },
+        layer: { type: 'string', enum: SFX_LAYERS },
+        volume: { type: 'number', minimum: 0.1, maximum: 1.8 },
+        impactVolume: { type: 'number', minimum: 0.1, maximum: 1.8 },
+        pitch: { type: 'number', minimum: 0.7, maximum: 1.6 },
       },
     },
     castStyle: {
@@ -383,12 +406,17 @@ function sanitizeDraft(draft, context, warnings) {
 
   const intensity = clampNumber(draft?.vfx?.intensity ?? 0.8, 0.2, 1.4);
   const vfxShape = VFX_SHAPES.includes(draft?.vfx?.shape) ? draft.vfx.shape : shapeForArchetype(archetype);
+  const vfxSecondaryShape = VFX_SHAPES.includes(draft?.vfx?.secondaryShape) ? draft?.vfx?.secondaryShape : null;
   const vfxSize = clampNumber(draft?.vfx?.size ?? defaultSizeForArchetype(archetype), 0.4, 2.2);
+  const shapeScale = clampNumber(draft?.vfx?.shapeScale ?? 1, 0.5, 2.6);
+  const shapeBlend = clampNumber(draft?.vfx?.shapeBlend ?? 0.4, 0, 1);
   const visibility = clampNumber(draft?.vfx?.visibility ?? 1.0, 0.4, 2.2);
   const ringColor = sanitizeColorToken(draft?.vfx?.ringColor);
+  const particleTheme = TRAIL_THEMES.includes(draft?.vfx?.particleTheme) ? draft.vfx.particleTheme : defaultParticleTheme(element, archetype);
 
   const primaryColor = sanitizeHexColor(draft?.vfx?.primaryColor) || defaultPrimaryColor(element);
   const secondaryColor = sanitizeHexColor(draft?.vfx?.secondaryColor) || defaultSecondaryColor(element);
+  const colorPalette = sanitizeColorPalette(draft?.vfx?.colors, primaryColor, secondaryColor);
   const trailEffect = TRAIL_EFFECTS.includes(draft?.vfx?.trailEffect)
     ? draft.vfx.trailEffect
     : defaultTrailForElement(element);
@@ -420,11 +448,16 @@ function sanitizeDraft(draft, context, warnings) {
       palette: sanitizeText(draft?.vfx?.palette, `${element}-sigil`, 24),
       intensity,
       shape: vfxShape,
+      secondaryShape: vfxSecondaryShape,
+      shapeScale,
+      shapeBlend,
       size: vfxSize,
       visibility,
       primaryColor,
       secondaryColor,
+      colors: colorPalette,
       trailEffect,
+      particleTheme,
       impactEffect,
       particleDensity,
       screenShake,
@@ -432,6 +465,11 @@ function sanitizeDraft(draft, context, warnings) {
     },
     sfx: {
       cue: sanitizeText(draft?.sfx?.cue, `${element}-cast`, 32),
+      impactCue: sanitizeText(draft?.sfx?.impactCue, `${element}-impact`, 32),
+      layer: SFX_LAYERS.includes(draft?.sfx?.layer) ? draft.sfx.layer : defaultSfxLayer(archetype),
+      volume: clampNumber(draft?.sfx?.volume ?? defaultSfxVolume(archetype), 0.1, 1.8),
+      impactVolume: clampNumber(draft?.sfx?.impactVolume ?? defaultImpactSfxVolume(archetype), 0.1, 1.8),
+      pitch: clampNumber(draft?.sfx?.pitch ?? defaultSfxPitch(element), 0.7, 1.6),
     },
     castStyle,
   };
@@ -1049,6 +1087,17 @@ function defaultPrimaryColor(element) {
   return map[element] || '#b366ff';
 }
 
+function sanitizeColorPalette(rawPalette, fallbackCore, fallbackAccent) {
+  const palette = {
+    core: sanitizeHexColor(rawPalette?.core) || fallbackCore,
+    accent: sanitizeHexColor(rawPalette?.accent) || fallbackAccent,
+    ring: sanitizeHexColor(rawPalette?.ring) || sanitizeHexColor(rawPalette?.accent) || fallbackAccent,
+    glow: sanitizeHexColor(rawPalette?.glow) || fallbackCore,
+    edge: sanitizeHexColor(rawPalette?.edge) || fallbackAccent,
+  };
+  return palette;
+}
+
 function defaultSecondaryColor(element) {
   const map = { fire: '#ffcc00', ice: '#ffffff', arcane: '#e0b3ff', earth: '#c8a96e', storm: '#ffffff' };
   return map[element] || '#e0b3ff';
@@ -1057,6 +1106,14 @@ function defaultSecondaryColor(element) {
 function defaultTrailForElement(element) {
   const map = { fire: 'ember_trail', ice: 'frost_mist', arcane: 'holy_motes', earth: 'smoke', storm: 'lightning_arc' };
   return map[element] || 'spark';
+}
+
+function defaultParticleTheme(element, archetype) {
+  if (archetype === 'beam') return 'glyphs';
+  if (element === 'storm') return 'stormthread';
+  if (element === 'ice') return 'mist';
+  if (element === 'fire') return 'embers';
+  return 'sparks';
 }
 
 function defaultImpactForArchetype(archetype) {
@@ -1072,6 +1129,27 @@ function defaultScreenShake(archetype) {
 function defaultCastStyle(archetype) {
   const map = { projectile: 'launch', aoe_burst: 'launch', zone_control: 'slam', chain: 'pulse', strike: 'smite', beam: 'focus' };
   return map[archetype] || 'launch';
+}
+
+function defaultSfxLayer(archetype) {
+  if (archetype === 'beam') return 'sustain';
+  if (archetype === 'strike') return 'impact';
+  return 'cast';
+}
+
+function defaultSfxVolume(archetype) {
+  const map = { projectile: 0.85, aoe_burst: 1.05, zone_control: 0.95, chain: 0.95, strike: 1.2, beam: 0.88 };
+  return map[archetype] || 0.85;
+}
+
+function defaultImpactSfxVolume(archetype) {
+  const map = { aoe_burst: 1.1, strike: 1.35, zone_control: 1.0, beam: 0.75, chain: 0.85, projectile: 0.8 };
+  return map[archetype] || 0.8;
+}
+
+function defaultSfxPitch(element) {
+  const map = { fire: 1.0, ice: 1.08, arcane: 0.96, earth: 0.92, storm: 1.12 };
+  return map[element] || 1.0;
 }
 
 function defaultSpellName(archetype, element) {

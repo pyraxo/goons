@@ -1224,7 +1224,21 @@ function spawnTrailParticle(position, spell) {
   if (Math.random() > density * 0.4) return;
 
   const color = parseHexColor(vfx.secondaryColor) || parseHexColor(vfx.primaryColor) || 0xffffff;
-  const trail = vfx.trailEffect || 'spark';
+  const trailAlias = vfx.particleTheme || vfx.trailEffect || 'spark';
+  const trail = trailAlias === 'torch' || trailAlias === 'embers'
+    ? 'ember_trail'
+    : trailAlias === 'sparks'
+      ? 'spark'
+    : trailAlias === 'mist'
+      ? 'frost_mist'
+      : trailAlias === 'glyph'
+        ? 'lightning_arc'
+      : trailAlias === 'glyphs'
+        ? 'lightning_arc'
+        : trailAlias === 'stormthread'
+          ? 'lightning_arc'
+          : trailAlias;
+
   let geo;
   let size;
 
@@ -1527,6 +1541,18 @@ function projectileGeometryForShape(shape, baseRadius) {
   if (shape === 'arc') {
     return new THREE.ConeGeometry(baseRadius * 0.9, baseRadius * 2.1, 9);
   }
+  if (shape === 'cone') {
+    return new THREE.ConeGeometry(baseRadius * 0.85, baseRadius * 2.4, 14);
+  }
+  if (shape === 'helix') {
+    return new THREE.TorusKnotGeometry(baseRadius * 0.85, Math.max(0.05, baseRadius * 0.25), 64, 8);
+  }
+  if (shape === 'sphereburst') {
+    return new THREE.IcosahedronGeometry(baseRadius * 0.95, 1);
+  }
+  if (shape === 'crystal') {
+    return new THREE.DodecahedronGeometry(baseRadius * 0.8, 0);
+  }
   return new THREE.SphereGeometry(baseRadius, 12, 12);
 }
 
@@ -1538,14 +1564,24 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
   }
 
   const power = clamp(Number(spell?.vfx?.intensity || 0.85), 0.2, 1.4);
-  const shape = ['orb', 'ring', 'wall', 'arc'].includes(spell?.vfx?.shape) ? spell.vfx.shape : 'orb';
+  const shape = ['orb', 'ring', 'wall', 'arc', 'cone', 'helix', 'sphereburst', 'crystal'].includes(spell?.vfx?.shape)
+    ? spell.vfx.shape
+    : 'orb';
   const shapeSize = clamp(Number(spell?.vfx?.size ?? 1), 0.4, 2.2);
   const baseRadius = (archetype === 'aoe_burst' ? 0.62 : 0.5) * shapeSize;
+  const secondaryShape = ['orb', 'ring', 'wall', 'arc', 'cone', 'helix', 'sphereburst', 'crystal'].includes(spell?.vfx?.secondaryShape)
+    ? spell?.vfx?.secondaryShape
+    : null;
+  const secondaryScale = clamp(Number(spell?.vfx?.shapeScale ?? 1), 0.5, 2.6);
+  const secondaryBlend = clamp(Number(spell?.vfx?.shapeBlend ?? 0.45), 0, 1);
+  const secondaryRadius = baseRadius * secondaryScale;
   const elementColor = colorForElement(spell?.element);
   const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
   const secondaryHex = parseHexColor(spell?.vfx?.secondaryColor);
-  const mainColor = primaryHex ?? elementColor.base;
-  const glowColor = secondaryHex ?? elementColor.emissive;
+  const colorPalette = spell?.vfx?.colors || {};
+  const mainColor = parseHexColor(colorPalette.core) || primaryHex || elementColor.base;
+  const glowColor = parseHexColor(colorPalette.glow) || secondaryHex || elementColor.emissive;
+  const edgeColor = parseHexColor(colorPalette.edge) || glowColor;
 
   const projectileMesh = new THREE.Mesh(
     projectileGeometryForShape(shape, baseRadius),
@@ -1561,10 +1597,28 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
   }
   projectileMesh.castShadow = true;
   scene.add(projectileMesh);
-
   const glowLight = new THREE.PointLight(mainColor, power * 2.5, 6);
   glowLight.position.set(0, 0, 0);
   projectileMesh.add(glowLight);
+
+  let secondaryMesh = null;
+  if (secondaryShape && secondaryShape !== shape) {
+    secondaryMesh = new THREE.Mesh(
+      projectileGeometryForShape(secondaryShape, secondaryRadius),
+      new THREE.MeshStandardMaterial({
+        color: edgeColor,
+        emissive: edgeColor,
+        emissiveIntensity: 0.3 + power * 0.35,
+        transparent: true,
+        opacity: 0.35 + secondaryBlend * 0.45,
+      })
+    );
+    secondaryMesh.position.copy(projectileMesh.position);
+    secondaryMesh.rotation.x = Math.PI * (0.05 + secondaryBlend * 0.15);
+    secondaryMesh.scale.multiplyScalar(0.65 + secondaryBlend * 0.5);
+    scene.add(secondaryMesh);
+    glowLight.intensity = power * (2.6 + secondaryBlend * 0.6);
+  }
 
   projectiles.push({
     kind: archetype,
@@ -1584,6 +1638,8 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
     effects: Array.isArray(spell?.effects) ? spell.effects : [],
     element: spell?.element || 'arcane',
     intensity: power,
+    secondaryShape,
+    secondaryMesh,
     spellVfx: spell?.vfx || null,
     glowLight,
   });
@@ -2516,6 +2572,11 @@ function updateProjectiles(dt) {
     }
 
     if (!projectile.target || projectile.target.dead || !enemies.includes(projectile.target)) {
+      if (projectile.secondaryMesh) {
+        scene.remove(projectile.secondaryMesh);
+        projectile.secondaryMesh.geometry.dispose();
+        projectile.secondaryMesh.material.dispose();
+      }
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
       continue;
@@ -2528,14 +2589,25 @@ function updateProjectiles(dt) {
 
     if (dir.lengthSq() <= step * step) {
       projectile.mesh.position.add(dir);
+      if (projectile.secondaryMesh) {
+        projectile.secondaryMesh.position.copy(projectile.mesh.position);
+      }
       explodeProjectile(projectile);
       if (projectile.glowLight) projectile.mesh.remove(projectile.glowLight);
+      if (projectile.secondaryMesh) {
+        scene.remove(projectile.secondaryMesh);
+        projectile.secondaryMesh.geometry.dispose();
+        projectile.secondaryMesh.material.dispose();
+      }
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
       continue;
     }
 
     projectile.mesh.position.add(dir.normalize().multiplyScalar(step));
+    if (projectile.secondaryMesh) {
+      projectile.secondaryMesh.position.copy(projectile.mesh.position);
+    }
     if (projectile.spellVfx && projectile.spellVfx.trailEffect !== 'none') {
       spawnTrailParticle(projectile.mesh.position, { vfx: projectile.spellVfx });
     }

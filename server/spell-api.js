@@ -257,9 +257,17 @@ CREATIVE PRIORITIES (most important):
 - Write a punchy DESCRIPTION that makes the player feel powerful. One vivid sentence.
 - Choose primaryColor and secondaryColor hex values that create beautiful, dramatic contrast. Think complementary palettes - molten orange with deep crimson, icy cyan with white, toxic green with violet.
 - Pick trailEffect and impactEffect that match the spell's fantasy. A meteor should explode, not ripple. Lightning should flash, not vortex.
+- Optionally set `vfx.particleTheme` (`embers`, `mist`, `glyph`, `stormthread`, `torch`, `sparks`) to tune the trail look and `vfx.colors` with extra layers:
+  - `core` for base body
+  - `accent` for secondary glow
+  - `ring` for discs and rings
+  - `glow` for additive bloom
+  - `edge` for trim highlights
+- For layered projectiles, set `vfx.secondaryShape` and tune `vfx.shapeScale` + `vfx.shapeBlend`.
 - Scale screenShake to the spell's drama: a tiny bolt gets 0.1, a cataclysmic zone gets 0.7+.
 - particleDensity should match spectacle: subtle precision spells ~0.5, dramatic area spells ~1.5.
 - castStyle shapes the launch animation: launch for thrown projectiles, slam for ground impacts, channel for sustained effects, sweep for wide arcs, pulse for radial bursts, smite for sky-to-ground strikes, focus for channeled beams.
+- Expand sound detail with sfx fields. `sfx.cue` is mandatory, `sfx.impactCue` optional for detonation, `sfx.layer` (`cast|sustain|impact|ambient`), and `sfx.volume`/`sfx.impactVolume`/`sfx.pitch` for cinematic control.
 
 ARCHETYPE-SPECIFIC VFX DESIGN (critical for visual quality):
 - zone_control + wave shape (lane_sweep pattern): These render as a multi-layered wave with a bright crest on top and foam at the leading edge. Choose a saturated, rich primaryColor for the wave body and a lighter/brighter secondaryColor for the crest and spray particles. Use high particleDensity (1.2-1.8) for spectacular sweeps. impactEffect should be 'ripple' for water/ice or 'explosion' for fire/earth sweeps. screenShake 0.3-0.6. castStyle 'sweep' or 'slam'. Set laneSpan 2-4 for wide sweeps, speed 10-20.

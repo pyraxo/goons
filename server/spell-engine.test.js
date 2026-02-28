@@ -49,11 +49,19 @@ test('includes name, description, and enriched vfx fields with defaults', () => 
   assert.ok(result.spell.description.length >= 8);
   assert.match(result.spell.vfx.primaryColor, /^#[0-9a-f]{6}$/);
   assert.match(result.spell.vfx.secondaryColor, /^#[0-9a-f]{6}$/);
+  assert.match(result.spell.vfx.colors.core, /^#[0-9a-f]{6}$/);
+  assert.match(result.spell.vfx.colors.glow, /^#[0-9a-f]{6}$/);
   assert.equal(typeof result.spell.vfx.trailEffect, 'string');
+  assert.equal(typeof result.spell.vfx.particleTheme, 'string');
   assert.equal(typeof result.spell.vfx.impactEffect, 'string');
   assert.equal(typeof result.spell.vfx.particleDensity, 'number');
   assert.equal(typeof result.spell.vfx.screenShake, 'number');
   assert.equal(typeof result.spell.castStyle, 'string');
+  assert.equal(typeof result.spell.sfx.volume, 'number');
+  assert.equal(typeof result.spell.sfx.impactVolume, 'number');
+  assert.equal(typeof result.spell.sfx.pitch, 'number');
+  assert.equal(typeof result.spell.sfx.impactCue, 'string');
+  assert.equal(typeof result.spell.sfx.layer, 'string');
 });
 
 test('preserves LLM-provided creative fields', () => {
