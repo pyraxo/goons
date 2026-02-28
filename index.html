@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prompt Defense 3D</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="hud">
+      <div class="stat">Base HP: <span id="baseHp"></span></div>
+      <div class="stat">Mana: <span id="mana"></span></div>
+      <div class="stat">Wave: <span id="wave"></span></div>
+      <div class="stat">Score: <span id="score"></span></div>
+      <div class="stat">Unlocked: <span id="unlocks"></span></div>
+      <div id="hint">WASD move commander. Enter opens command bar.</div>
+    </div>
+
+    <div id="commandWrap" class="hidden">
+      <input id="commandInput" type="text" autocomplete="off" placeholder="Type a spell..." />
+    </div>
+
+    <div id="toast"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
