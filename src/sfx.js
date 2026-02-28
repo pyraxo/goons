@@ -9,12 +9,20 @@ function getCtx() {
   return ctx;
 }
 
+// Cooldowns to avoid overlapping sounds when many enemies are hit per frame
+let lastHurtAt = 0;
+let lastDeathAt = 0;
+const HURT_COOLDOWN = 0.06; // seconds
+const DEATH_COOLDOWN = 0.05;
+
 /**
  * Short percussive "hurt" thud — pitched-down noise burst + low sine thump.
  */
 export function playHurt() {
   const ac = getCtx();
   const now = ac.currentTime;
+  if (now - lastHurtAt < HURT_COOLDOWN) return;
+  lastHurtAt = now;
 
   // noise burst
   const len = 0.08;
@@ -60,6 +68,8 @@ export function playHurt() {
 export function playDeath() {
   const ac = getCtx();
   const now = ac.currentTime;
+  if (now - lastDeathAt < DEATH_COOLDOWN) return;
+  lastDeathAt = now;
 
   // descending tone
   const osc = ac.createOscillator();
