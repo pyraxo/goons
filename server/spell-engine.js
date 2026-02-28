@@ -17,6 +17,61 @@ const EFFECT_WEIGHTS = {
   shield_break: 8,
 };
 
+const ANCHOR_PROFILE_ALIASES = {
+  tsunami: 'tidal surge',
+  'tidal wave': 'tidal surge',
+};
+
+const ANCHOR_PROFILES = {
+  fireball: {
+    element: 'fire',
+    allowedArchetypes: ['aoe_burst', 'projectile'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'orb',
+    preferredTargetMode: 'nearest_enemy',
+    requiredEffects: ['burn'],
+    castStyle: 'launch',
+  },
+  wall: {
+    element: 'earth',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_circle',
+    preferredShape: 'wall',
+    preferredTargetMode: 'lane_cluster',
+    requiredEffects: ['slow'],
+    castStyle: 'slam',
+  },
+  frost: {
+    element: 'ice',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_circle',
+    preferredShape: 'ring',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['freeze', 'slow'],
+    castStyle: 'pulse',
+  },
+  bolt: {
+    element: 'storm',
+    allowedArchetypes: ['chain', 'projectile'],
+    preferredPattern: 'single_enemy',
+    preferredShape: 'arc',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['stun'],
+    castStyle: 'pulse',
+  },
+  'tidal surge': {
+    element: 'ice',
+    allowedArchetypes: ['zone_control'],
+    preferredPattern: 'lane_sweep',
+    preferredShape: 'wave',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['knockback', 'slow'],
+    castStyle: 'sweep',
+    minLaneSpan: 2,
+    minLength: 16,
+  },
+};
+
 const TOOL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -222,6 +277,7 @@ function deriveCost(powerScore) {
 
 function sanitizeDraft(draft, context, warnings) {
   const archetypeSet = allowedArchetypes();
+  const unlocks = normalizeUnlocks(context?.unlocks);
 
   let archetype = typeof draft?.archetype === 'string' ? draft.archetype : 'projectile';
   if (!archetypeSet.has(archetype)) {
@@ -436,6 +492,13 @@ function applyCompatibilityRules(spell, warnings) {
 export function validateAndFinalizeSpell(draft, context) {
   const warnings = [];
   const spell = sanitizeDraft(draft, context, warnings);
+  const anchorProfile = resolveAnchorProfile(context);
+  if (anchorProfile) {
+    applyAnchorProfile(spell, anchorProfile, warnings);
+  }
+  applyContextualVariance(spell, context, warnings);
+  applySoftNoRepeat(spell, context, warnings);
+  applyCompatibilityRules(spell, warnings);
   const powerScore = computePowerScore(spell);
   spell.cost = deriveCost(powerScore);
 
@@ -508,6 +571,31 @@ function createPreset(name) {
     };
   }
 
+  if (name === 'tidal surge' || name === 'tsunami') {
+    return {
+      name: 'Abyssal Undertow',
+      description: 'A towering enchanted wave crashes through the lane, dragging enemies backward in its wake.',
+      archetype: 'zone_control',
+      element: 'ice',
+      targeting: { mode: 'front_cluster', pattern: 'lane_sweep', singleTarget: false },
+      numbers: { damage: 24, radius: 2.8, durationSec: 4.2, tickRate: 0.8, width: 18, length: 22, laneSpan: 2, speed: 14 },
+      effects: ['knockback', 'slow'],
+      vfx: {
+        palette: 'abyssal-tide',
+        intensity: 1.0,
+        shape: 'wave',
+        primaryColor: '#2a9dff',
+        secondaryColor: '#c7f1ff',
+        trailEffect: 'frost_mist',
+        impactEffect: 'ripple',
+        particleDensity: 1.4,
+        screenShake: 0.45,
+      },
+      sfx: { cue: 'tidal-crash' },
+      castStyle: 'sweep',
+    };
+  }
+
   return {
     name: 'Arcane Missile',
     description: 'A shimmering bolt of raw arcane energy that homes in on the nearest foe.',
@@ -524,9 +612,15 @@ function createPreset(name) {
 
 export function deterministicFallback(prompt, context) {
   const raw = String(prompt || '').toLowerCase();
+  const anchorKey = normalizeAnchorKey(context?.spellIdentity?.curatedKey || context?.spellIdentity?.anchorKey);
+  const canonicalAnchor = ANCHOR_PROFILE_ALIASES[anchorKey] || anchorKey;
 
   let presetName = 'default';
-  if (/(volcano|lava|magma|meteor|eruption|fire)/.test(raw)) {
+  if (canonicalAnchor && ANCHOR_PROFILES[canonicalAnchor]) {
+    presetName = canonicalAnchor;
+  } else if (/(tsunami|tidal|wave|surge|deluge|undertow)/.test(raw)) {
+    presetName = 'tidal surge';
+  } else if (/(volcano|lava|magma|meteor|eruption|fire)/.test(raw)) {
     presetName = 'fireball';
   } else if (/(wall|barrier|block|fortify|stone)/.test(raw)) {
     presetName = 'wall';
@@ -543,6 +637,280 @@ export function deterministicFallback(prompt, context) {
   }
 
   return validateAndFinalizeSpell(createPreset('default'), context);
+}
+
+function resolveAnchorProfile(context) {
+  const rawAnchor = normalizeAnchorKey(context?.spellIdentity?.curatedKey || context?.spellIdentity?.anchorKey);
+  if (!rawAnchor) {
+    return null;
+  }
+  const canonicalAnchor = ANCHOR_PROFILE_ALIASES[rawAnchor] || rawAnchor;
+  const profile = ANCHOR_PROFILES[canonicalAnchor];
+  if (!profile) {
+    return null;
+  }
+  return {
+    key: canonicalAnchor,
+    ...profile,
+  };
+}
+
+function applyAnchorProfile(spell, profile, warnings) {
+  if (!profile || !spell) {
+    return;
+  }
+
+  if (profile.element && spell.element !== profile.element) {
+    spell.element = profile.element;
+    warnings.push(`anchor(${profile.key}) forced element=${profile.element}`);
+  }
+
+  if (Array.isArray(profile.allowedArchetypes) && profile.allowedArchetypes.length > 0) {
+    if (!profile.allowedArchetypes.includes(spell.archetype)) {
+      spell.archetype = profile.allowedArchetypes[0];
+      warnings.push(`anchor(${profile.key}) forced archetype=${spell.archetype}`);
+    }
+  }
+
+  if (profile.preferredPattern && TARGET_PATTERNS.includes(profile.preferredPattern)) {
+    spell.targeting.pattern = profile.preferredPattern;
+    spell.targeting.singleTarget = profile.preferredPattern === 'single_enemy';
+  }
+
+  if (profile.preferredTargetMode && TARGET_MODES.includes(profile.preferredTargetMode)) {
+    spell.targeting.mode = profile.preferredTargetMode;
+  }
+
+  if (profile.preferredShape && VFX_SHAPES.includes(profile.preferredShape)) {
+    spell.vfx.shape = profile.preferredShape;
+  }
+
+  if (profile.castStyle && CAST_STYLES.includes(profile.castStyle)) {
+    spell.castStyle = profile.castStyle;
+  }
+
+  if (Number.isFinite(profile.minLaneSpan)) {
+    spell.numbers.laneSpan = Math.max(Math.round(profile.minLaneSpan), Math.round(Number(spell.numbers.laneSpan || 1)));
+  }
+
+  if (Number.isFinite(profile.minLength)) {
+    spell.numbers.length = Math.max(Number(profile.minLength), Number(spell.numbers.length || 1));
+  }
+
+  if (Array.isArray(profile.requiredEffects) && profile.requiredEffects.length > 0) {
+    spell.effects = uniqueEffects([...profile.requiredEffects, ...(spell.effects || [])]).slice(0, 3);
+  }
+}
+
+function applyContextualVariance(spell, context, warnings) {
+  if (!spell || typeof spell !== 'object') {
+    return;
+  }
+  if (!context?.variantContext || typeof context.variantContext !== 'object') {
+    return;
+  }
+
+  const enemies = Array.isArray(context?.nearbyEnemies) ? context.nearbyEnemies : [];
+  const castIndex = Math.max(1, Math.round(Number(context?.variantContext?.castIndex || 1)));
+  const wave = clampNumber(context?.wave ?? 1, 1, 60);
+  const mana = clampNumber(context?.mana ?? 0, 0, 999);
+  const enemyCount = enemies.length;
+  const nearBaseCount = enemies.filter((enemy) => Number(enemy?.z ?? 0) >= 12).length;
+  const spread = laneSpread(enemies);
+  const avgHp = enemyCount > 0 ? enemies.reduce((sum, enemy) => sum + Number(enemy?.hp ?? 0), 0) / enemyCount : 0;
+
+  const enemyPressure = clamp01(enemyCount / 10);
+  const nearBasePressure = clamp01(nearBaseCount / 6);
+  const lanePressure = clamp01(spread / 4);
+  const durabilityPressure = clamp01(avgHp / 110);
+  const wavePressure = clamp01(wave / 40);
+  const manaPressure = clamp01(mana / 120);
+
+  const seedBase = [
+    context?.spellIdentity?.anchorKey || '',
+    context?.spellIdentity?.curatedKey || '',
+    castIndex,
+    wave,
+    mana,
+    enemyCount,
+    spread,
+  ].join('|');
+  const signedA = pseudoRandomSigned(`${seedBase}:a`);
+  const signedB = pseudoRandomSigned(`${seedBase}:b`);
+
+  const aggression = enemyPressure * 0.05 + nearBasePressure * 0.05 + durabilityPressure * 0.04 + wavePressure * 0.03;
+  const economy = (1 - manaPressure) * 0.06;
+  const damageScale = clampNumber(1 + aggression - economy + signedA * 0.05, 0.9, 1.12);
+  const areaScale = clampNumber(1 + enemyPressure * 0.06 + lanePressure * 0.05 + signedB * 0.05, 0.9, 1.12);
+  const speedScale = clampNumber(1 + signedA * 0.08 + nearBasePressure * 0.04, 0.9, 1.12);
+
+  spell.numbers.damage = clampNumber(spell.numbers.damage * damageScale, 8, 120);
+  spell.numbers.radius = clampNumber(spell.numbers.radius * areaScale, 0.8, 8);
+  const cycle = ((castIndex - 1) % 3) + 1;
+  if (cycle === 1) {
+    spell.numbers.damage = clampNumber(spell.numbers.damage + 2.2, 8, 120);
+  } else if (cycle === 2) {
+    spell.numbers.radius = clampNumber(spell.numbers.radius + 0.28, 0.8, 8);
+  } else {
+    spell.numbers.speed = clampNumber((spell.numbers.speed || 24) + 1.8, 8, 44);
+  }
+
+  if (spell.archetype === 'zone_control') {
+    spell.numbers.durationSec = clampNumber(spell.numbers.durationSec * clampNumber(1 + signedB * 0.06 + enemyPressure * 0.04, 0.9, 1.14), 1, 10);
+    spell.numbers.length = clampNumber(spell.numbers.length * clampNumber(1 + lanePressure * 0.08 + signedA * 0.05, 0.9, 1.15), 1, 120);
+    spell.numbers.width = clampNumber(spell.numbers.width * clampNumber(1 + lanePressure * 0.07 + signedB * 0.05, 0.9, 1.15), 1, 44);
+    spell.numbers.laneSpan = Math.round(clampNumber(spell.numbers.laneSpan + (lanePressure > 0.5 ? 1 : 0), 1, 5));
+  } else {
+    spell.numbers.speed = clampNumber(spell.numbers.speed * speedScale, 8, 44);
+  }
+
+  spell.vfx.intensity = clampNumber(spell.vfx.intensity + signedB * 0.08, 0.2, 1.4);
+  spell.vfx.particleDensity = clampNumber(spell.vfx.particleDensity + signedA * 0.15 + enemyPressure * 0.15, 0.2, 2.0);
+  spell.vfx.screenShake = clampNumber(spell.vfx.screenShake + signedB * 0.08 + aggression * 0.35, 0, 1.0);
+
+  if (mana < 24 && spell.effects.length > 2) {
+    spell.effects = spell.effects.slice(0, 2);
+    warnings.push('mana_low_effect_budget_reduced');
+  }
+}
+
+function applySoftNoRepeat(spell, context, warnings) {
+  const recentSignatures = Array.isArray(context?.variantContext?.recentSignatures)
+    ? context.variantContext.recentSignatures.filter((item) => typeof item === 'string')
+    : [];
+  if (recentSignatures.length === 0) {
+    return;
+  }
+
+  let signature = buildSpellVariantSignature(spell);
+  if (!recentSignatures.includes(signature)) {
+    return;
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    mutateSpellForNoRepeat(spell, context, attempt);
+    applyCompatibilityRules(spell, warnings);
+    signature = buildSpellVariantSignature(spell);
+    if (!recentSignatures.includes(signature)) {
+      warnings.push('soft_no_repeat_guard_adjusted_variant');
+      return;
+    }
+  }
+
+  warnings.push('soft_no_repeat_guard_unresolved');
+}
+
+function mutateSpellForNoRepeat(spell, context, attempt) {
+  const seed = [
+    context?.spellIdentity?.anchorKey || 'spell',
+    context?.variantContext?.castIndex || 1,
+    attempt,
+  ].join('|');
+  const signed = pseudoRandomSigned(seed);
+  const flip = pseudoRandomUnit(`${seed}:flip`) > 0.5;
+
+  spell.numbers.damage = clampNumber(spell.numbers.damage * (flip ? 1.06 : 0.94), 8, 120);
+  spell.numbers.radius = clampNumber(spell.numbers.radius * (flip ? 0.94 : 1.06), 0.8, 8);
+  spell.numbers.speed = clampNumber((spell.numbers.speed || 24) * (flip ? 1.04 : 0.96), 8, 44);
+  spell.vfx.particleDensity = clampNumber((spell.vfx.particleDensity || 1.0) + signed * 0.18, 0.2, 2.0);
+  spell.vfx.screenShake = clampNumber((spell.vfx.screenShake || 0.2) + signed * 0.1, 0, 1.0);
+  spell.castStyle = rotateCastStyle(spell.castStyle, attempt + 1);
+
+  spell.vfx.primaryColor = tintHexColor(spell.vfx.primaryColor, '#ffffff', flip ? 0.06 : 0.03);
+  spell.vfx.secondaryColor = tintHexColor(spell.vfx.secondaryColor, '#000000', flip ? 0.04 : 0.02);
+}
+
+export function buildSpellVariantSignature(spell) {
+  if (!spell || typeof spell !== 'object') {
+    return 'invalid';
+  }
+  const effects = Array.isArray(spell.effects) ? [...spell.effects].sort() : [];
+  const numbers = spell.numbers || {};
+  const targeting = spell.targeting || {};
+  const vfx = spell.vfx || {};
+  return [
+    String(spell.archetype || ''),
+    String(spell.element || ''),
+    String(targeting.pattern || ''),
+    String(targeting.mode || ''),
+    String(vfx.shape || ''),
+    String(spell.castStyle || ''),
+    effects.join(','),
+    Math.round(Number(numbers.damage || 0) / 4),
+    Math.round(Number(numbers.radius || 0) * 2),
+    Math.round(Number(numbers.durationSec || 0) * 2),
+    Math.round(Number(numbers.speed || 0) / 3),
+    Math.round(Number(numbers.laneSpan || 1)),
+    Math.round(Number(numbers.width || 0) / 3),
+    Math.round(Number(numbers.length || 0) / 4),
+  ].join('|');
+}
+
+function rotateCastStyle(current, offset) {
+  const index = CAST_STYLES.indexOf(current);
+  if (index < 0) {
+    return CAST_STYLES[0];
+  }
+  return CAST_STYLES[(index + offset) % CAST_STYLES.length];
+}
+
+function laneSpread(enemies) {
+  const lanes = new Set();
+  for (const enemy of enemies) {
+    lanes.add(clampNumber(enemy?.lane ?? 2, 0, 4));
+  }
+  return lanes.size;
+}
+
+function pseudoRandomSigned(seed) {
+  return pseudoRandomUnit(seed) * 2 - 1;
+}
+
+function pseudoRandomUnit(seed) {
+  const text = String(seed || '');
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 0xffffffff;
+}
+
+function tintHexColor(hex, target, amount) {
+  const sourceHex = sanitizeHexColor(hex) || '#999999';
+  const targetHex = sanitizeHexColor(target) || sourceHex;
+  const blend = clampNumber(amount, 0, 1);
+  const sourceRgb = hexToRgb(sourceHex);
+  const targetRgb = hexToRgb(targetHex);
+  const mixed = {
+    r: Math.round(sourceRgb.r + (targetRgb.r - sourceRgb.r) * blend),
+    g: Math.round(sourceRgb.g + (targetRgb.g - sourceRgb.g) * blend),
+    b: Math.round(sourceRgb.b + (targetRgb.b - sourceRgb.b) * blend),
+  };
+  return rgbToHex(mixed);
+}
+
+function hexToRgb(hex) {
+  const value = sanitizeHexColor(hex) || '#000000';
+  return {
+    r: Number.parseInt(value.slice(1, 3), 16),
+    g: Number.parseInt(value.slice(3, 5), 16),
+    b: Number.parseInt(value.slice(5, 7), 16),
+  };
+}
+
+function rgbToHex(rgb) {
+  const r = clampNumber(Math.round(rgb?.r ?? 0), 0, 255).toString(16).padStart(2, '0');
+  const g = clampNumber(Math.round(rgb?.g ?? 0), 0, 255).toString(16).padStart(2, '0');
+  const b = clampNumber(Math.round(rgb?.b ?? 0), 0, 255).toString(16).padStart(2, '0');
+  return `#${r}${g}${b}`;
+}
+
+function normalizeAnchorKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
 function shapeForArchetype(archetype) {
@@ -637,6 +1005,10 @@ function clampNumber(value, min, max) {
     return min;
   }
   return Math.max(min, Math.min(max, numeric));
+}
+
+function clamp01(value) {
+  return clampNumber(value, 0, 1);
 }
 
 function round2(value) {

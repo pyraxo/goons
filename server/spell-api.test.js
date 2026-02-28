@@ -79,6 +79,12 @@ test('retries when first provider response is token-incomplete without tool call
     const providerInput = extractProviderInputPayload(providerCalls[0]);
     assert.equal(providerInput.prompt, baseRequest.prompt);
     assert.equal(providerInput.templateContext, undefined);
+    assert.equal(providerInput.spellIdentity?.source, 'freeform');
+    assert.equal(providerInput.spellIdentity?.anchorPolicy, 'adaptive');
+    assert.equal(providerInput.spellIdentity?.anchorKey, 'sand');
+    assert.equal(typeof providerInput.variantContext?.castIndex, 'number');
+    assert.ok(providerInput.variantContext.castIndex >= 1);
+    assert.ok(Array.isArray(providerInput.variantContext?.recentVariantSignatures));
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey === undefined) {
@@ -168,6 +174,12 @@ test('injects template context and response meta when prompt matches spell templ
     assert.deepEqual(providerInput.templateContext?.matchedAlias, 'fireball');
     assert.equal(typeof providerInput.templateContext?.expandedIntent, 'string');
     assert.ok(providerInput.templateContext.expandedIntent.length > 0);
+    assert.equal(providerInput.spellIdentity?.source, 'curated_lexicon');
+    assert.equal(providerInput.spellIdentity?.anchorPolicy, 'strong');
+    assert.equal(providerInput.spellIdentity?.curatedKey, 'fireball');
+    assert.equal(providerInput.spellIdentity?.anchorKey, 'fireball');
+    assert.equal(typeof providerInput.variantContext?.castIndex, 'number');
+    assert.ok(providerInput.variantContext.castIndex >= 1);
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey === undefined) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deterministicFallback, validateAndFinalizeSpell } from './spell-engine.js';
+import { buildSpellVariantSignature, deterministicFallback, validateAndFinalizeSpell } from './spell-engine.js';
 
 const baseContext = {
   wave: 5,
@@ -235,4 +235,84 @@ test('supports nearest_enemy targeting and ring visibility options', () => {
   assert.equal(result.spell.targeting.mode, 'nearest_enemy');
   assert.equal(result.spell.vfx.ringColor, '#66ccff');
   assert.equal(result.spell.vfx.visibility, 1.8);
+});
+
+test('strong curated anchor keeps fireball identity even when draft drifts', () => {
+  const result = validateAndFinalizeSpell(
+    {
+      archetype: 'zone_control',
+      element: 'ice',
+      targeting: { mode: 'lane_cluster', pattern: 'lane_sweep', singleTarget: false },
+      numbers: { damage: 22, radius: 2.4, durationSec: 4, tickRate: 0.7, width: 16, length: 20, laneSpan: 2, speed: 14 },
+      effects: ['slow'],
+      vfx: { palette: 'tempest', intensity: 0.9, shape: 'wave' },
+      sfx: { cue: 'drifted' },
+      castStyle: 'sweep',
+    },
+    {
+      ...baseContext,
+      spellIdentity: {
+        anchorKey: 'fireball',
+        curatedKey: 'fireball',
+        anchorPolicy: 'strong',
+        source: 'curated_lexicon',
+      },
+      variantContext: {
+        castIndex: 1,
+        recentSignatures: [],
+      },
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.spell.element, 'fire');
+  assert.ok(['aoe_burst', 'projectile'].includes(result.spell.archetype));
+  assert.ok(result.spell.effects.includes('burn'));
+});
+
+test('soft no-repeat guard adjusts duplicate variant signature', () => {
+  const draft = {
+    archetype: 'projectile',
+    element: 'storm',
+    targeting: { mode: 'nearest_enemy', pattern: 'single_enemy', singleTarget: true },
+    numbers: { damage: 32, radius: 1.4, durationSec: 0, speed: 28 },
+    effects: ['slow'],
+    vfx: { palette: 'ion', intensity: 0.9, shape: 'orb' },
+    sfx: { cue: 'arc' },
+    castStyle: 'launch',
+  };
+
+  const first = validateAndFinalizeSpell(draft, {
+    ...baseContext,
+    spellIdentity: { anchorKey: 'spark', curatedKey: null, anchorPolicy: 'adaptive', source: 'freeform' },
+    variantContext: { castIndex: 1, recentSignatures: [] },
+  });
+  const firstSignature = buildSpellVariantSignature(first.spell);
+
+  const second = validateAndFinalizeSpell(draft, {
+    ...baseContext,
+    spellIdentity: { anchorKey: 'spark', curatedKey: null, anchorPolicy: 'adaptive', source: 'freeform' },
+    variantContext: { castIndex: 1, recentSignatures: [firstSignature] },
+  });
+  const secondSignature = buildSpellVariantSignature(second.spell);
+
+  assert.notEqual(secondSignature, firstSignature);
+  assert.ok(second.warnings.includes('soft_no_repeat_guard_adjusted_variant'));
+});
+
+test('contextual fallback creates different variants across cast index', () => {
+  const first = deterministicFallback('fireball', {
+    ...baseContext,
+    spellIdentity: { anchorKey: 'fireball', curatedKey: 'fireball', anchorPolicy: 'strong', source: 'curated_lexicon' },
+    variantContext: { castIndex: 1, recentSignatures: [] },
+  });
+  const second = deterministicFallback('fireball', {
+    ...baseContext,
+    spellIdentity: { anchorKey: 'fireball', curatedKey: 'fireball', anchorPolicy: 'strong', source: 'curated_lexicon' },
+    variantContext: { castIndex: 2, recentSignatures: [] },
+  });
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.notEqual(buildSpellVariantSignature(first.spell), buildSpellVariantSignature(second.spell));
 });

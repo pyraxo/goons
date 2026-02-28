@@ -22,6 +22,12 @@ test('matches aliases case-insensitively', () => {
   assert.equal(match?.alias, 'ring of ice');
 });
 
+test('matches tsunami alias to tidal surge template', () => {
+  const match = matchSpellTemplate('TSUNAMI');
+  assert.equal(match?.key, 'tidal surge');
+  assert.equal(match?.alias, 'tsunami');
+});
+
 test('returns null when prompt has no matching alias', () => {
   const match = matchSpellTemplate('summon asteroid swarm');
   assert.equal(match, null);

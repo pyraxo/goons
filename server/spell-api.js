@@ -1,4 +1,9 @@
-import { deterministicFallback, getToolDefinition, validateAndFinalizeSpell } from './spell-engine.js';
+import {
+  buildSpellVariantSignature,
+  deterministicFallback,
+  getToolDefinition,
+  validateAndFinalizeSpell,
+} from './spell-engine.js';
 import { getSpellTemplateCatalogVersion, matchSpellTemplate } from './spell-template-matcher.js';
 import { inspect } from 'node:util';
 
@@ -22,6 +27,9 @@ const PRIMARY_MAX_OUTPUT_TOKENS = Number(process.env.SPELL_API_MAX_OUTPUT_TOKENS
 const RETRY_MAX_OUTPUT_TOKENS = Number(
   process.env.SPELL_API_RETRY_MAX_OUTPUT_TOKENS || Math.max(PRIMARY_MAX_OUTPUT_TOKENS, 700)
 );
+const VARIANT_SIGNATURE_WINDOW = Number(process.env.SPELL_VARIANT_SIGNATURE_WINDOW || 4);
+const MAX_VARIANT_ANCHORS = Number(process.env.SPELL_VARIANT_MAX_ANCHORS || 120);
+const variantState = new Map();
 
 export async function handleSpellGenerate(requestBody, obs = {}) {
   const requestId = obs.requestId || 'req-unknown';
@@ -46,12 +54,22 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
   const ctx = context.value;
   const prompt = ctx.prompt;
   const templateMatch = matchSpellTemplate(prompt);
+  const spellIdentity = buildSpellIdentity(prompt, templateMatch);
+  const variantContext = buildVariantContext(spellIdentity.anchorKey);
+  const runtimeContext = {
+    ...ctx,
+    spellIdentity,
+    variantContext,
+  };
   log('request_validated', {
     promptPreview: prompt.slice(0, 60),
     wave: ctx.wave,
     mana: ctx.mana,
     unlocks: ctx.unlocks,
     nearbyEnemyCount: ctx.nearbyEnemies.length,
+    anchorKey: spellIdentity.anchorKey,
+    anchorPolicy: spellIdentity.anchorPolicy,
+    variantCastIndex: variantContext.castIndex,
   });
   if (templateMatch) {
     log('template_match', {
@@ -76,8 +94,8 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
       throw new Error('OPENAI_API_KEY missing');
     }
 
-    const draft = await fetchSpellDraftFromOpenAI(apiKey, prompt, ctx, templateMatch, log);
-    const finalized = validateAndFinalizeSpell(draft, ctx);
+    const draft = await fetchSpellDraftFromOpenAI(apiKey, prompt, runtimeContext, templateMatch, log);
+    const finalized = validateAndFinalizeSpell(draft, runtimeContext);
 
     if (!finalized.ok) {
       metrics.validationFail += 1;
@@ -103,10 +121,10 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
     }
     fallbackReason = fallbackReason || message || 'unknown_error';
 
-    resolved = deterministicFallback(prompt, ctx);
+    resolved = deterministicFallback(prompt, runtimeContext);
     if (!resolved.ok) {
       const emergency = deterministicFallback('default arcane projectile', {
-        ...ctx,
+        ...runtimeContext,
         unlocks: ['fireball', 'wall', 'frost', 'bolt'],
       });
       resolved = emergency;
@@ -120,6 +138,9 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
       warnings: resolved?.warnings || [],
     });
   }
+
+  const variantSignature = buildSpellVariantSignature(resolved?.spell);
+  rememberVariantSignature(spellIdentity.anchorKey, variantSignature);
 
   const latencyMs = Date.now() - startedAt;
   metrics.totalLatencyMs += latencyMs;
@@ -145,6 +166,16 @@ export async function handleSpellGenerate(requestBody, obs = {}) {
               alias: templateMatch.alias,
             }
           : null,
+        spellIdentity: {
+          anchorKey: spellIdentity.anchorKey,
+          anchorPolicy: spellIdentity.anchorPolicy,
+          source: spellIdentity.source,
+          curatedKey: spellIdentity.curatedKey,
+        },
+        variant: {
+          castIndex: variantContext.castIndex,
+          signature: variantSignature,
+        },
         expandedPromptPreview: templateMatch ? truncate(templateMatch.expansion, 180) : null,
         telemetry: summarizeMetrics(),
       },
@@ -241,7 +272,12 @@ MECHANICAL RULES:
 - Return exactly one craft_spell tool call.
 - Use targeting.pattern/targeting.singleTarget and numbers.width/numbers.length to match prompt geometry.
 - If templateContext.expandedIntent is provided, treat it as supplemental guidance while preserving the user prompt intent.
-- Balance damage/radius/duration for fair real-time gameplay.`,
+- Balance damage/radius/duration for fair real-time gameplay.
+- If spellIdentity.anchorPolicy is "strong", keep the spell anchored to that core fantasy (no element/archetype drift away from the anchor identity).
+- Generate a fresh variant for this cast; do not mirror recentVariantSignatures.
+- Use wave/mana/nearbyEnemies as the primary driver for variant choice.
+- Keep power swing in a narrow band, roughly within +-12% of a normal cast for this anchor.
+- If prompt includes short modifiers (for example "fireball but wider"), honor those modifiers strongly while preserving anchor identity.`,
     input: [
       {
         role: 'user',
@@ -254,6 +290,20 @@ MECHANICAL RULES:
               mana: context.mana,
               unlocks: context.unlocks,
               nearbyEnemies: context.nearbyEnemies,
+              spellIdentity: context.spellIdentity
+                ? {
+                    anchorKey: context.spellIdentity.anchorKey,
+                    anchorPolicy: context.spellIdentity.anchorPolicy,
+                    source: context.spellIdentity.source,
+                    curatedKey: context.spellIdentity.curatedKey,
+                  }
+                : undefined,
+              variantContext: context.variantContext
+                ? {
+                    castIndex: context.variantContext.castIndex,
+                    recentVariantSignatures: context.variantContext.recentSignatures,
+                  }
+                : undefined,
               templateContext: templateMatch
                 ? {
                     matchedKey: templateMatch.key,
@@ -484,6 +534,97 @@ function sanitizeRequestBody(body) {
       nearbyEnemies,
     },
   };
+}
+
+function buildSpellIdentity(prompt, templateMatch) {
+  if (templateMatch?.key) {
+    return {
+      anchorKey: normalizeAnchorKey(templateMatch.key),
+      curatedKey: normalizeAnchorKey(templateMatch.key),
+      anchorPolicy: 'strong',
+      source: 'curated_lexicon',
+    };
+  }
+
+  const freeformAnchor = deriveFreeformAnchor(prompt);
+  return {
+    anchorKey: freeformAnchor,
+    curatedKey: null,
+    anchorPolicy: 'adaptive',
+    source: 'freeform',
+  };
+}
+
+function deriveFreeformAnchor(prompt) {
+  const normalized = normalizeAnchorKey(prompt).replace(/[^a-z0-9 ]/g, ' ');
+  const compact = normalized.replace(/\s+/g, ' ').trim();
+  if (!compact) {
+    return 'spell';
+  }
+
+  const words = compact.split(' ');
+  if (words.length === 1) {
+    return words[0];
+  }
+  return words[0];
+}
+
+function buildVariantContext(anchorKey) {
+  const normalizedAnchor = normalizeAnchorKey(anchorKey) || 'spell';
+  const existing = variantState.get(normalizedAnchor) || {
+    castCount: 0,
+    recentSignatures: [],
+    touchedAt: Date.now(),
+  };
+
+  return {
+    castIndex: existing.castCount + 1,
+    recentSignatures: existing.recentSignatures.slice(0, VARIANT_SIGNATURE_WINDOW),
+  };
+}
+
+function rememberVariantSignature(anchorKey, signature) {
+  const normalizedAnchor = normalizeAnchorKey(anchorKey) || 'spell';
+  const safeSignature = typeof signature === 'string' && signature.trim() ? signature.trim() : 'invalid';
+  const existing = variantState.get(normalizedAnchor) || {
+    castCount: 0,
+    recentSignatures: [],
+    touchedAt: 0,
+  };
+
+  const nextRecent = [safeSignature, ...existing.recentSignatures.filter((entry) => entry !== safeSignature)].slice(
+    0,
+    VARIANT_SIGNATURE_WINDOW
+  );
+
+  variantState.set(normalizedAnchor, {
+    castCount: existing.castCount + 1,
+    recentSignatures: nextRecent,
+    touchedAt: Date.now(),
+  });
+
+  trimVariantState();
+}
+
+function trimVariantState() {
+  if (variantState.size <= MAX_VARIANT_ANCHORS) {
+    return;
+  }
+  const entries = [...variantState.entries()].sort((a, b) => Number(a[1]?.touchedAt || 0) - Number(b[1]?.touchedAt || 0));
+  while (entries.length > MAX_VARIANT_ANCHORS) {
+    const oldest = entries.shift();
+    if (!oldest) {
+      break;
+    }
+    variantState.delete(oldest[0]);
+  }
+}
+
+function normalizeAnchorKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
 }
 
 function clamp(value, min, max) {
