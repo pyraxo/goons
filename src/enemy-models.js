@@ -45,6 +45,7 @@ const textureUrls = {
   metalnessMap: '/models/enemies/goblin-walk/textures/Goblin_Metallic.png',
   aoMap: '/models/enemies/goblin-walk/textures/Goblin_Mixed_AO.png',
 };
+const meleeAttackClipPath = '/models/enemies/goblin-walk/StandingMeleeAttackDownward.fbx';
 
 const stateAliases = {
   idle: ['idle'],
@@ -81,6 +82,7 @@ async function internalLoadEnemyModels() {
   const texturePack = await loadTexturePack();
   const loader = new FBXLoader();
   const byPath = new Map();
+  const meleeAttackClip = await loadOptionalAttackClip(loader, meleeAttackClipPath);
 
   for (const [kind, entry] of byKind) {
     let shared = byPath.get(entry.path);
@@ -89,12 +91,14 @@ async function internalLoadEnemyModels() {
       byPath.set(entry.path, shared);
     }
 
+    const clips = kind === 'melee' ? withAttackClip(shared.clips, meleeAttackClip) : shared.clips;
+
     registry.set(kind, {
       kind,
       entry,
       failed: shared.failed,
       templateRoot: shared.templateRoot,
-      clips: shared.clips,
+      clips,
     });
   }
 }
@@ -140,6 +144,41 @@ async function loadPathTemplate(loader, path, texturePack) {
       clips: [],
     };
   }
+}
+
+async function loadOptionalAttackClip(loader, path) {
+  try {
+    const root = await loader.loadAsync(path);
+    const clips = root.animations || [];
+    if (!clips.length) {
+      console.warn(`[enemy-models] No animations found in ${path}.`);
+      return null;
+    }
+
+    const clip = clips[0].clone();
+    clip.name = 'attack';
+    return clip;
+  } catch (error) {
+    console.warn(`[enemy-models] Optional attack clip missing at ${path}. Falling back to run.`, error);
+    return null;
+  }
+}
+
+function withAttackClip(baseClips, attackClip) {
+  if (!attackClip) {
+    return baseClips;
+  }
+
+  const merged = [...baseClips];
+  const attackKey = normalize('attack');
+  const index = merged.findIndex((clip) => normalize(clip.name) === attackKey);
+  if (index >= 0) {
+    merged[index] = attackClip;
+  } else {
+    merged.push(attackClip);
+  }
+
+  return merged;
 }
 
 function normalizeRootToGround(root) {
