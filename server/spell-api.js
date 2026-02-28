@@ -259,7 +259,7 @@ CREATIVE PRIORITIES (most important):
 - Pick trailEffect and impactEffect that match the spell's fantasy. A meteor should explode, not ripple. Lightning should flash, not vortex.
 - Scale screenShake to the spell's drama: a tiny bolt gets 0.1, a cataclysmic zone gets 0.7+.
 - particleDensity should match spectacle: subtle precision spells ~0.5, dramatic area spells ~1.5.
-- castStyle shapes the launch animation: launch for thrown projectiles, slam for ground impacts, channel for beams, sweep for wide arcs, pulse for radial bursts.
+- castStyle shapes the launch animation: launch for thrown projectiles, slam for ground impacts, channel for sustained effects, sweep for wide arcs, pulse for radial bursts, smite for sky-to-ground strikes, focus for channeled beams.
 
 ARCHETYPE-SPECIFIC VFX DESIGN (critical for visual quality):
 - zone_control + wave shape (lane_sweep pattern): These render as a multi-layered wave with a bright crest on top and foam at the leading edge. Choose a saturated, rich primaryColor for the wave body and a lighter/brighter secondaryColor for the crest and spray particles. Use high particleDensity (1.2-1.8) for spectacular sweeps. impactEffect should be 'ripple' for water/ice or 'explosion' for fire/earth sweeps. screenShake 0.3-0.6. castStyle 'sweep' or 'slam'. Set laneSpan 2-4 for wide sweeps, speed 10-20.
@@ -267,6 +267,8 @@ ARCHETYPE-SPECIFIC VFX DESIGN (critical for visual quality):
 - zone_control + wall shape: These render as solid barriers with magical shimmer and glow. Use earthy/solid primaryColor with a magical secondaryColor for the emissive glow edge. impactEffect 'ripple' or 'pillar'. Low particleDensity (0.4-0.8). castStyle 'slam'. intensity 0.6-0.8.
 - chain archetype: Renders as lightning arcs between targets. Use bright, electric primaryColor with white or pale secondaryColor for maximum contrast. trailEffect 'lightning_arc'. impactEffect 'flash'. intensity 1.0+. castStyle 'pulse'.
 - projectile/aoe_burst: Single projectile with trail particles and impact explosion. Vivid element-matching colors. impactEffect 'explosion' for fire/earth, 'shatter' for ice, 'flash' for arcane/storm. screenShake 0.4-0.7 for bursts. particleDensity 1.2+ for trails. castStyle 'launch'.
+- strike archetype: Instant sky-to-ground bolt that deals massive burst damage in a radius at the target point. No travel time. Renders as a glowing pillar descending from the sky with a ground impact ring. Use shape 'pillar', pattern 'ground_strike'. castStyle 'smite'. High screenShake (0.5-0.8). impactEffect 'explosion'. Dramatic primaryColor/secondaryColor. particleDensity 1.4+. Perfect for meteors, divine smites, lightning bolts from the sky, seismic slams.
+- beam archetype: Sustained channeled ray from the commander toward enemies in a line. Deals tick damage over its duration. Renders as a glowing cylinder with pulsing core and outer glow. Use shape 'beam', pattern 'line_from_caster', targeting mode 'commander_facing'. castStyle 'focus'. Set durationSec 1.5-4, tickRate 0.2-0.5, length 20-60, width 2-6. impactEffect 'pillar'. Low screenShake (0.1-0.3). Perfect for sun beams, dragon breath, laser rays, energy channels.
 
 MECHANICAL RULES:
 - Return exactly one craft_spell tool call.

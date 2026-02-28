@@ -1,12 +1,12 @@
-const ARCHETYPES = ['projectile', 'aoe_burst', 'zone_control', 'chain'];
+const ARCHETYPES = ['projectile', 'aoe_burst', 'zone_control', 'chain', 'strike', 'beam'];
 const ELEMENTS = ['fire', 'ice', 'arcane', 'earth', 'storm'];
-const TARGET_MODES = ['nearest', 'nearest_enemy', 'lane', 'lane_cluster', 'ground_point', 'front_cluster'];
-const TARGET_PATTERNS = ['single_enemy', 'lane_circle', 'lane_sweep'];
+const TARGET_MODES = ['nearest', 'nearest_enemy', 'lane', 'lane_cluster', 'ground_point', 'front_cluster', 'commander_facing'];
+const TARGET_PATTERNS = ['single_enemy', 'lane_circle', 'lane_sweep', 'ground_strike', 'line_from_caster'];
 const EFFECTS = ['burn', 'freeze', 'stun', 'knockback', 'slow', 'shield_break'];
-const VFX_SHAPES = ['orb', 'ring', 'wall', 'arc', 'wave'];
+const VFX_SHAPES = ['orb', 'ring', 'wall', 'arc', 'wave', 'pillar', 'beam'];
 const TRAIL_EFFECTS = ['spark', 'smoke', 'frost_mist', 'lightning_arc', 'ember_trail', 'shadow_wisp', 'holy_motes', 'none'];
 const IMPACT_EFFECTS = ['explosion', 'shatter', 'ripple', 'flash', 'vortex', 'pillar', 'none'];
-const CAST_STYLES = ['launch', 'slam', 'channel', 'sweep', 'pulse'];
+const CAST_STYLES = ['launch', 'slam', 'channel', 'sweep', 'pulse', 'smite', 'focus'];
 
 const EFFECT_WEIGHTS = {
   burn: 10,
@@ -68,6 +68,44 @@ const ANCHOR_PROFILES = {
     requiredEffects: ['knockback', 'slow'],
     castStyle: 'sweep',
     minLaneSpan: 2,
+    minLength: 16,
+  },
+  meteor: {
+    element: 'fire',
+    allowedArchetypes: ['strike'],
+    preferredPattern: 'ground_strike',
+    preferredShape: 'pillar',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['burn', 'stun'],
+    castStyle: 'smite',
+  },
+  quake: {
+    element: 'earth',
+    allowedArchetypes: ['strike'],
+    preferredPattern: 'ground_strike',
+    preferredShape: 'pillar',
+    preferredTargetMode: 'front_cluster',
+    requiredEffects: ['stun', 'knockback'],
+    castStyle: 'smite',
+  },
+  sunlance: {
+    element: 'fire',
+    allowedArchetypes: ['beam'],
+    preferredPattern: 'line_from_caster',
+    preferredShape: 'beam',
+    preferredTargetMode: 'commander_facing',
+    requiredEffects: ['burn'],
+    castStyle: 'focus',
+    minLength: 20,
+  },
+  'dragon breath': {
+    element: 'fire',
+    allowedArchetypes: ['beam'],
+    preferredPattern: 'line_from_caster',
+    preferredShape: 'beam',
+    preferredTargetMode: 'commander_facing',
+    requiredEffects: ['burn', 'knockback'],
+    castStyle: 'focus',
     minLength: 16,
   },
 };
@@ -223,6 +261,12 @@ function uniqueEffects(effects) {
 }
 
 function inferTargetPattern(archetype, shape, explicitSingleTarget) {
+  if (archetype === 'strike') {
+    return 'ground_strike';
+  }
+  if (archetype === 'beam') {
+    return 'line_from_caster';
+  }
   if (explicitSingleTarget === true) {
     return 'single_enemy';
   }
@@ -246,6 +290,8 @@ function computePowerScore(spell) {
   const durationCost = numbers.durationSec * 4.8;
   const tickCost = spell.archetype === 'zone_control' ? (1 / Math.max(0.2, numbers.tickRate || 1.0)) * 7.2 : 0;
   const chainCost = spell.archetype === 'chain' ? Math.max(0, (numbers.chainCount || 2) - 1) * 8.2 : 0;
+  const strikeCost = spell.archetype === 'strike' ? 12 : 0;
+  const beamCost = spell.archetype === 'beam' ? (numbers.durationSec || 2) * 3.5 + Math.max(0, (numbers.length || 20) - 12) * 0.5 : 0;
   const speedCost =
     spell.archetype === 'projectile' || spell.archetype === 'aoe_burst' || spell.targeting.pattern === 'lane_sweep'
       ? Math.max(0, (numbers.speed || 24) - 16) * 0.3
@@ -261,6 +307,8 @@ function computePowerScore(spell) {
     durationCost +
     tickCost +
     chainCost +
+    strikeCost +
+    beamCost +
     speedCost +
     widthCost +
     lengthCost +
@@ -305,7 +353,8 @@ function sanitizeDraft(draft, context, warnings) {
     targeting.lane = Math.round(lane);
   }
 
-  const radius = clampNumber(draft?.numbers?.radius ?? (archetype === 'zone_control' ? 2.4 : 2.1), 0.8, 8);
+  const defaultRadius = archetype === 'zone_control' ? 2.4 : archetype === 'strike' ? 3.0 : 2.1;
+  const radius = clampNumber(draft?.numbers?.radius ?? defaultRadius, 0.8, 8);
   const widthDefault = pattern === 'lane_sweep' ? 22 : pattern === 'lane_circle' ? 8 : radius * 2;
   const width = clampNumber(draft?.numbers?.width ?? widthDefault, 1, 44);
   const lengthDefault = pattern === 'lane_sweep' ? 34 : Math.max(3.2, radius * 2);
@@ -315,7 +364,7 @@ function sanitizeDraft(draft, context, warnings) {
   const numbers = {
     damage: clampNumber(draft?.numbers?.damage ?? 24, 8, 120),
     radius,
-    durationSec: clampNumber(draft?.numbers?.durationSec ?? (archetype === 'zone_control' ? 4 : 0), 0, 10),
+    durationSec: clampNumber(draft?.numbers?.durationSec ?? (archetype === 'zone_control' ? 4 : archetype === 'beam' ? 2.5 : 0), 0, 10),
     tickRate: clampNumber(draft?.numbers?.tickRate ?? 0.9, 0.2, 2),
     chainCount: Math.round(clampNumber(draft?.numbers?.chainCount ?? 3, 1, 7)),
     laneSpan: Math.round(clampNumber(draft?.numbers?.laneSpan ?? laneSpanDefault, 1, 5)),
@@ -326,7 +375,7 @@ function sanitizeDraft(draft, context, warnings) {
 
   let effects = uniqueEffects(draft?.effects).slice(0, 3);
 
-  if (archetype !== 'zone_control' && (targeting.pattern === 'lane_circle' || targeting.pattern === 'lane_sweep')) {
+  if (archetype !== 'zone_control' && archetype !== 'strike' && archetype !== 'beam' && (targeting.pattern === 'lane_circle' || targeting.pattern === 'lane_sweep')) {
     targeting.pattern = 'single_enemy';
     targeting.singleTarget = true;
     warnings.push('lane-targeted pattern downgraded to single_enemy');
@@ -471,7 +520,7 @@ function applyCompatibilityRules(spell, warnings) {
     delete spell.numbers.chainCount;
   }
 
-  if (spell.archetype !== 'zone_control') {
+  if (spell.archetype !== 'zone_control' && spell.archetype !== 'beam') {
     spell.numbers.durationSec = clampNumber(spell.numbers.durationSec, 0, 6);
     if (spell.numbers.durationSec > 0 && spell.archetype !== 'aoe_burst') {
       spell.numbers.durationSec = 0;
@@ -482,6 +531,33 @@ function applyCompatibilityRules(spell, warnings) {
   if (spell.archetype === 'chain') {
     spell.targeting.mode = 'front_cluster';
     spell.targeting.singleTarget = false;
+  }
+
+  if (spell.archetype === 'strike') {
+    spell.targeting.pattern = 'ground_strike';
+    spell.targeting.singleTarget = false;
+    spell.vfx.shape = 'pillar';
+    spell.castStyle = 'smite';
+    spell.numbers.durationSec = 0;
+    spell.numbers.radius = clampNumber(spell.numbers.radius, 1.5, 6);
+    if (!['nearest', 'nearest_enemy', 'front_cluster', 'lane', 'lane_cluster', 'ground_point'].includes(spell.targeting.mode)) {
+      spell.targeting.mode = 'front_cluster';
+    }
+    delete spell.numbers.chainCount;
+  }
+
+  if (spell.archetype === 'beam') {
+    spell.targeting.pattern = 'line_from_caster';
+    spell.targeting.singleTarget = false;
+    spell.targeting.mode = 'commander_facing';
+    spell.vfx.shape = 'beam';
+    spell.castStyle = 'focus';
+    spell.numbers.durationSec = clampNumber(spell.numbers.durationSec || 2.5, 1, 6);
+    spell.numbers.length = clampNumber(spell.numbers.length || 30, 10, 80);
+    spell.numbers.width = clampNumber(spell.numbers.width || 3, 1.5, 8);
+    spell.numbers.tickRate = clampNumber(spell.numbers.tickRate || 0.3, 0.15, 0.8);
+    spell.numbers.laneSpan = 1;
+    delete spell.numbers.chainCount;
   }
 
   if (spell.targeting.mode !== 'lane' && spell.targeting.mode !== 'lane_cluster') {
@@ -596,6 +672,36 @@ function createPreset(name) {
     };
   }
 
+  if (name === 'meteor' || name === 'strike') {
+    return {
+      name: 'Cataclysm Bolt',
+      description: 'A devastating pillar of fire tears from the sky, slamming into the ground with explosive force.',
+      archetype: 'strike',
+      element: 'fire',
+      targeting: { mode: 'front_cluster', pattern: 'ground_strike', singleTarget: false },
+      numbers: { damage: 75, radius: 3.5, durationSec: 0, speed: 28, width: 7, length: 7, laneSpan: 1 },
+      effects: ['burn', 'stun'],
+      vfx: { palette: 'cataclysm', intensity: 1.2, shape: 'pillar', primaryColor: '#ff4400', secondaryColor: '#ffcc00', trailEffect: 'ember_trail', impactEffect: 'explosion', particleDensity: 1.6, screenShake: 0.7 },
+      sfx: { cue: 'sky-smite' },
+      castStyle: 'smite',
+    };
+  }
+
+  if (name === 'sunlance' || name === 'beam' || name === 'dragon breath') {
+    return {
+      name: 'Solar Convergence',
+      description: 'A searing beam of concentrated light channels from the commander, burning everything in its path.',
+      archetype: 'beam',
+      element: 'fire',
+      targeting: { mode: 'commander_facing', pattern: 'line_from_caster', singleTarget: false },
+      numbers: { damage: 18, radius: 2.0, durationSec: 2.5, tickRate: 0.3, width: 3, length: 35, laneSpan: 1, speed: 28 },
+      effects: ['burn'],
+      vfx: { palette: 'solar', intensity: 1.0, shape: 'beam', primaryColor: '#ffaa22', secondaryColor: '#ffffff', trailEffect: 'ember_trail', impactEffect: 'pillar', particleDensity: 1.4, screenShake: 0.2 },
+      sfx: { cue: 'beam-channel' },
+      castStyle: 'focus',
+    };
+  }
+
   return {
     name: 'Arcane Missile',
     description: 'A shimmering bolt of raw arcane energy that homes in on the nearest foe.',
@@ -620,7 +726,11 @@ export function deterministicFallback(prompt, context) {
     presetName = canonicalAnchor;
   } else if (/(tsunami|tidal|wave|surge|deluge|undertow)/.test(raw)) {
     presetName = 'tidal surge';
-  } else if (/(volcano|lava|magma|meteor|eruption|fire)/.test(raw)) {
+  } else if (/(meteor|smite|strike|sky.*bolt|divine|cataclysm|quake|earthquake|seismic)/.test(raw)) {
+    presetName = 'meteor';
+  } else if (/(beam|laser|ray|lance|sun.*lance|dragon.*breath|channel|convergence)/.test(raw)) {
+    presetName = 'beam';
+  } else if (/(volcano|lava|magma|eruption|fire)/.test(raw)) {
     presetName = 'fireball';
   } else if (/(wall|barrier|block|fortify|stone)/.test(raw)) {
     presetName = 'wall';
@@ -760,6 +870,10 @@ function applyContextualVariance(spell, context, warnings) {
     spell.numbers.length = clampNumber(spell.numbers.length * clampNumber(1 + lanePressure * 0.08 + signedA * 0.05, 0.9, 1.15), 1, 120);
     spell.numbers.width = clampNumber(spell.numbers.width * clampNumber(1 + lanePressure * 0.07 + signedB * 0.05, 0.9, 1.15), 1, 44);
     spell.numbers.laneSpan = Math.round(clampNumber(spell.numbers.laneSpan + (lanePressure > 0.5 ? 1 : 0), 1, 5));
+  } else if (spell.archetype === 'beam') {
+    spell.numbers.durationSec = clampNumber(spell.numbers.durationSec * clampNumber(1 + signedB * 0.05 + enemyPressure * 0.03, 0.92, 1.1), 1, 6);
+    spell.numbers.length = clampNumber(spell.numbers.length * clampNumber(1 + lanePressure * 0.06 + signedA * 0.04, 0.92, 1.12), 10, 80);
+    spell.numbers.width = clampNumber(spell.numbers.width * clampNumber(1 + enemyPressure * 0.05, 0.95, 1.1), 1.5, 8);
   } else {
     spell.numbers.speed = clampNumber(spell.numbers.speed * speedScale, 8, 44);
   }
@@ -916,6 +1030,8 @@ function normalizeAnchorKey(value) {
 function shapeForArchetype(archetype) {
   if (archetype === 'zone_control') return 'ring';
   if (archetype === 'chain') return 'arc';
+  if (archetype === 'strike') return 'pillar';
+  if (archetype === 'beam') return 'beam';
   return 'orb';
 }
 
@@ -923,6 +1039,8 @@ function defaultSizeForArchetype(archetype) {
   if (archetype === 'aoe_burst') return 1.15;
   if (archetype === 'zone_control') return 1.0;
   if (archetype === 'chain') return 0.85;
+  if (archetype === 'strike') return 1.3;
+  if (archetype === 'beam') return 0.9;
   return 1.0;
 }
 
@@ -942,23 +1060,23 @@ function defaultTrailForElement(element) {
 }
 
 function defaultImpactForArchetype(archetype) {
-  const map = { projectile: 'flash', aoe_burst: 'explosion', zone_control: 'ripple', chain: 'flash' };
+  const map = { projectile: 'flash', aoe_burst: 'explosion', zone_control: 'ripple', chain: 'flash', strike: 'explosion', beam: 'pillar' };
   return map[archetype] || 'flash';
 }
 
 function defaultScreenShake(archetype) {
-  const map = { projectile: 0.15, aoe_burst: 0.45, zone_control: 0.25, chain: 0.2 };
+  const map = { projectile: 0.15, aoe_burst: 0.45, zone_control: 0.25, chain: 0.2, strike: 0.65, beam: 0.15 };
   return map[archetype] || 0.15;
 }
 
 function defaultCastStyle(archetype) {
-  const map = { projectile: 'launch', aoe_burst: 'launch', zone_control: 'slam', chain: 'pulse' };
+  const map = { projectile: 'launch', aoe_burst: 'launch', zone_control: 'slam', chain: 'pulse', strike: 'smite', beam: 'focus' };
   return map[archetype] || 'launch';
 }
 
 function defaultSpellName(archetype, element) {
   const elementNames = { fire: 'Flame', ice: 'Frost', arcane: 'Arcane', earth: 'Stone', storm: 'Storm' };
-  const archetypeNames = { projectile: 'Bolt', aoe_burst: 'Blast', zone_control: 'Ward', chain: 'Arc' };
+  const archetypeNames = { projectile: 'Bolt', aoe_burst: 'Blast', zone_control: 'Ward', chain: 'Arc', strike: 'Smite', beam: 'Ray' };
   return `${elementNames[element] || 'Arcane'} ${archetypeNames[archetype] || 'Spell'}`;
 }
 

@@ -85,6 +85,7 @@ const enemies = [];
 const projectiles = [];
 const walls = [];
 const zones = [];
+const beams = [];
 const spellQueue = [];
 let spellQueueProcessing = false;
 
@@ -960,6 +961,10 @@ function castFromConfig(spell) {
     casted = castZoneFromConfig(spell);
   } else if (archetype === 'chain') {
     casted = castChainFromConfig(spell);
+  } else if (archetype === 'strike') {
+    casted = castStrikeFromConfig(spell);
+  } else if (archetype === 'beam') {
+    casted = castBeamFromConfig(spell);
   } else {
     casted = castProjectileFromConfig(spell, archetype);
   }
@@ -1886,6 +1891,214 @@ function castChainFromConfig(spell) {
   return true;
 }
 
+function castStrikeFromConfig(spell) {
+  const liveEnemies = enemies.filter((enemy) => !enemy.dead);
+  if (!liveEnemies.length) {
+    setToast('No target for strike');
+    return false;
+  }
+
+  const target = selectTarget(spell?.targeting);
+  if (!target) {
+    setToast('No target for strike');
+    return false;
+  }
+
+  const damage = clamp(Number(spell?.numbers?.damage || 60), 8, 150);
+  const radius = clamp(Number(spell?.numbers?.radius || 3.0), 1.5, 6);
+  const effects = Array.isArray(spell?.effects) ? spell.effects : [];
+  const element = spell?.element || 'fire';
+  const intensity = clamp(Number(spell?.vfx?.intensity || 1.0), 0.2, 1.4);
+  const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
+  const secondaryHex = parseHexColor(spell?.vfx?.secondaryColor);
+  const elementColor = colorForElement(element);
+  const mainColor = primaryHex ?? elementColor.base;
+  const glowColor = secondaryHex ?? elementColor.emissive;
+
+  const strikeX = target.mesh.position.x;
+  const strikeZ = target.mesh.position.z;
+  const skyY = 28;
+
+  const boltGeo = new THREE.CylinderGeometry(0.35, 0.6, skyY, 8);
+  const boltMat = new THREE.MeshStandardMaterial({
+    color: mainColor,
+    emissive: glowColor,
+    emissiveIntensity: 2.0,
+    transparent: true,
+    opacity: 0.92,
+  });
+  const bolt = new THREE.Mesh(boltGeo, boltMat);
+  bolt.position.set(strikeX, skyY / 2, strikeZ);
+  bolt.castShadow = true;
+  scene.add(bolt);
+
+  const boltGlow = new THREE.PointLight(mainColor, intensity * 5, 16);
+  boltGlow.position.set(strikeX, 4, strikeZ);
+  scene.add(boltGlow);
+
+  const groundRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.3, radius, 24),
+    new THREE.MeshStandardMaterial({
+      color: mainColor,
+      emissive: mainColor,
+      emissiveIntensity: 1.5,
+      transparent: true,
+      opacity: 0.7,
+      side: THREE.DoubleSide,
+    })
+  );
+  groundRing.rotation.x = -Math.PI / 2;
+  groundRing.position.set(strikeX, 0.1, strikeZ);
+  scene.add(groundRing);
+
+  projectiles.push({
+    kind: 'strike_bolt',
+    mesh: bolt,
+    life: 0.35,
+    glowLight: boltGlow,
+    groundRing,
+  });
+
+  const impactPos = new THREE.Vector3(strikeX, 0.5, strikeZ);
+  for (const enemy of enemies) {
+    if (enemy.dead) continue;
+    const d = enemy.mesh.position.distanceTo(impactPos);
+    if (d <= radius) {
+      const falloff = 1 - d / radius;
+      const dealt = damage * (0.5 + falloff * 0.5);
+      damageEnemy(enemy, dealt);
+      applyImpactEffects(enemy, effects, element, intensity);
+      applyHitReaction(enemy, {
+        source: 'strike',
+        damage: dealt,
+        intensity,
+        effects,
+        impactPoint: { x: strikeX, z: strikeZ },
+      });
+    }
+  }
+
+  if (spell?.vfx) {
+    spawnImpactEffect(impactPos, { vfx: spell.vfx });
+  }
+
+  return true;
+}
+
+function castBeamFromConfig(spell) {
+  const liveEnemies = enemies.filter((enemy) => !enemy.dead);
+  if (!liveEnemies.length) {
+    setToast('No targets for beam');
+    return false;
+  }
+
+  if (beams.length >= 3) {
+    setToast('Too many active beams');
+    return false;
+  }
+
+  const damage = clamp(Number(spell?.numbers?.damage || 18), 4, 80);
+  const duration = clamp(Number(spell?.numbers?.durationSec || 2.5), 1, 6);
+  const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.3), 0.15, 0.8);
+  const beamLength = clamp(Number(spell?.numbers?.length || 35), 10, 80);
+  const beamWidth = clamp(Number(spell?.numbers?.width || 3), 1.5, 8);
+  const effects = Array.isArray(spell?.effects) ? spell.effects : [];
+  const element = spell?.element || 'fire';
+  const intensity = clamp(Number(spell?.vfx?.intensity || 1.0), 0.2, 1.4);
+  const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
+  const secondaryHex = parseHexColor(spell?.vfx?.secondaryColor);
+  const elementColor = colorForElement(element);
+  const mainColor = primaryHex ?? elementColor.base;
+  const glowColor = secondaryHex ?? elementColor.emissive;
+
+  const originX = commander.mesh.position.x;
+  const originZ = commander.mesh.position.z - 0.5;
+  const originY = 1.8;
+
+  const front = [...liveEnemies].sort((a, b) => b.mesh.position.z - a.mesh.position.z)[0];
+  const targetLane = front ? front.lane : Math.round(clamp((originX + (LANE_COUNT - 1) * LANE_SPACING / 2) / LANE_SPACING, 0, LANE_COUNT - 1));
+  const targetX = laneX(targetLane);
+  const aimDirX = targetX - originX;
+  const aimDirZ = -beamLength;
+  const aimLen = Math.sqrt(aimDirX * aimDirX + aimDirZ * aimDirZ);
+  const normX = aimDirX / aimLen;
+  const normZ = aimDirZ / aimLen;
+
+  const beamGroup = new THREE.Group();
+  beamGroup.position.set(originX, originY, originZ);
+
+  const coreMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(beamWidth * 0.15, beamWidth * 0.2, beamLength, 8),
+    new THREE.MeshStandardMaterial({
+      color: mainColor,
+      emissive: mainColor,
+      emissiveIntensity: 1.8,
+      transparent: true,
+      opacity: 0.85,
+    })
+  );
+  coreMesh.rotation.x = Math.PI / 2;
+  coreMesh.position.set((targetX - originX) * 0.5, 0, -beamLength / 2);
+  beamGroup.add(coreMesh);
+
+  const outerMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(beamWidth * 0.4, beamWidth * 0.5, beamLength, 10),
+    new THREE.MeshStandardMaterial({
+      color: glowColor,
+      emissive: glowColor,
+      emissiveIntensity: 0.6,
+      transparent: true,
+      opacity: 0.3,
+    })
+  );
+  outerMesh.rotation.x = Math.PI / 2;
+  outerMesh.position.set((targetX - originX) * 0.5, 0, -beamLength / 2);
+  beamGroup.add(outerMesh);
+
+  const beamGlow = new THREE.PointLight(mainColor, intensity * 3, 12);
+  beamGlow.position.set((targetX - originX) * 0.3, 0, -beamLength * 0.3);
+  beamGroup.add(beamGlow);
+
+  const endGlow = new THREE.PointLight(mainColor, intensity * 2, 8);
+  endGlow.position.set(targetX - originX, 0, -beamLength * 0.85);
+  beamGroup.add(endGlow);
+
+  const angle = Math.atan2(targetX - originX, -(originZ - beamLength));
+  beamGroup.rotation.y = angle * 0.15;
+
+  scene.add(beamGroup);
+
+  beams.push({
+    mesh: beamGroup,
+    coreMesh,
+    outerMesh,
+    originX,
+    originZ,
+    originY,
+    dirX: normX,
+    dirZ: normZ,
+    targetX,
+    beamLength,
+    beamWidth,
+    damage,
+    duration,
+    initialDuration: duration,
+    tickRate,
+    timer: 0,
+    effects,
+    element,
+    intensity,
+    spellVfx: spell?.vfx || null,
+  });
+
+  if (spell?.vfx) {
+    const startPos = new THREE.Vector3(originX, originY, originZ);
+    spawnImpactEffect(startPos, { vfx: { ...spell.vfx, screenShake: 0 } });
+  }
+
+  return true;
+}
+
 function laneSpanFromNumbers(numbers, width, enforceSweepSpan = false) {
   const laneSpanRaw = Number(numbers?.laneSpan);
   const explicitSpan = Number.isFinite(laneSpanRaw) ? Math.round(laneSpanRaw) : 0;
@@ -2274,6 +2487,34 @@ function updateProjectiles(dt) {
       continue;
     }
 
+    if (projectile.kind === 'strike_bolt') {
+      projectile.life -= dt;
+      const fade = clamp(projectile.life / 0.35, 0, 1);
+      projectile.mesh.material.opacity = fade * 0.92;
+      projectile.mesh.scale.x = 0.6 + fade * 0.4;
+      projectile.mesh.scale.z = 0.6 + fade * 0.4;
+      if (projectile.glowLight) {
+        projectile.glowLight.intensity = fade * 5;
+      }
+      if (projectile.groundRing) {
+        projectile.groundRing.material.opacity = fade * 0.7;
+        projectile.groundRing.scale.setScalar(1 + (1 - fade) * 2);
+      }
+      if (projectile.life <= 0) {
+        scene.remove(projectile.mesh);
+        if (projectile.glowLight) scene.remove(projectile.glowLight);
+        if (projectile.groundRing) {
+          scene.remove(projectile.groundRing);
+          projectile.groundRing.geometry.dispose();
+          projectile.groundRing.material.dispose();
+        }
+        projectile.mesh.geometry.dispose();
+        projectile.mesh.material.dispose();
+        projectiles.splice(i, 1);
+      }
+      continue;
+    }
+
     if (!projectile.target || projectile.target.dead || !enemies.includes(projectile.target)) {
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
@@ -2531,6 +2772,66 @@ function updateZones(dt) {
   }
 }
 
+function updateBeams(dt) {
+  for (let i = beams.length - 1; i >= 0; i -= 1) {
+    const beam = beams[i];
+    beam.duration -= dt;
+    beam.timer += dt;
+
+    const fade = clamp(beam.duration / (beam.initialDuration || 2.5), 0.1, 1);
+    const pulse = 1 + Math.sin(GAME.elapsed * 8 + i * 2.1) * 0.12;
+
+    if (beam.coreMesh) {
+      beam.coreMesh.material.opacity = clamp(0.5 + fade * 0.35, 0.3, 0.85) * pulse;
+      beam.coreMesh.material.emissiveIntensity = 1.2 + fade * 0.8;
+    }
+    if (beam.outerMesh) {
+      beam.outerMesh.material.opacity = clamp(0.1 + fade * 0.25, 0.05, 0.35);
+      beam.outerMesh.scale.x = pulse;
+      beam.outerMesh.scale.z = pulse;
+    }
+
+    if (beam.spellVfx && Math.random() < 0.4) {
+      const t = Math.random();
+      const particlePos = new THREE.Vector3(
+        beam.originX + (beam.targetX - beam.originX) * t + (Math.random() - 0.5) * beam.beamWidth,
+        beam.originY + (Math.random() - 0.5) * 0.5,
+        beam.originZ - beam.beamLength * t
+      );
+      spawnZoneParticle(particlePos, beam.spellVfx, 'rise');
+    }
+
+    while (beam.timer >= beam.tickRate) {
+      beam.timer -= beam.tickRate;
+      for (const enemy of enemies) {
+        if (enemy.dead) continue;
+        const ez = enemy.mesh.position.z;
+        const ex = enemy.mesh.position.x;
+        const inZ = ez <= beam.originZ && ez >= beam.originZ - beam.beamLength;
+        const beamXAtZ = beam.originX + (beam.targetX - beam.originX) * ((beam.originZ - ez) / beam.beamLength);
+        const inX = Math.abs(ex - beamXAtZ) <= beam.beamWidth * 0.6;
+        if (inZ && inX) {
+          const tickDamage = beam.damage * beam.tickRate;
+          damageEnemy(enemy, tickDamage);
+          applyImpactEffects(enemy, beam.effects, beam.element, beam.intensity * 0.7);
+          applyHitReaction(enemy, {
+            source: 'beam',
+            damage: tickDamage,
+            intensity: beam.intensity * 0.5,
+            effects: beam.effects,
+            impactPoint: { x: beamXAtZ, z: ez },
+          });
+        }
+      }
+    }
+
+    if (beam.duration <= 0) {
+      scene.remove(beam.mesh);
+      beams.splice(i, 1);
+    }
+  }
+}
+
 function updateResources(dt) {
   GAME.mana = clamp(GAME.mana + GAME.manaRegen * dt, 0, GAME.maxMana);
 }
@@ -2585,6 +2886,7 @@ function animate() {
     updateResources(dt);
     updateWalls(dt);
     updateZones(dt);
+    updateBeams(dt);
     updateEnemies(dt);
     updateProjectiles(dt);
     updateTrailParticles(dt);

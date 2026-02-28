@@ -48,6 +48,7 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
   const projectiles = [];
   const walls = [];
   const zones = [];
+  const beams = [];
   const runtimeGoldMultipliers = new Map();
   const activeDots = new Map();
   let runtimeHooks = null;
@@ -538,6 +539,147 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     return true;
   }
 
+  function castStrikeFromConfig(spell) {
+    const target = selectTarget(spell?.targeting);
+    if (!target) {
+      onToast('No target for strike');
+      return false;
+    }
+
+    const damage = clamp(Number(spell?.numbers?.damage || 60), 8, 150);
+    const radius = clamp(Number(spell?.numbers?.radius || 3.0), 1.5, 6);
+    const effects = Array.isArray(spell?.effects) ? spell.effects : [];
+    const element = spell?.element || 'fire';
+    const intensity = clamp(Number(spell?.vfx?.intensity || 1.0), 0.2, 1.4);
+    const elementColor = colorForElement(element);
+
+    const strikeX = target.mesh.position.x;
+    const strikeZ = target.mesh.position.z;
+    const skyY = 28;
+
+    const bolt = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.35, 0.6, skyY, 8),
+      new THREE.MeshStandardMaterial({
+        color: elementColor.base,
+        emissive: elementColor.emissive,
+        emissiveIntensity: 2.0,
+        transparent: true,
+        opacity: 0.92,
+      })
+    );
+    bolt.position.set(strikeX, skyY / 2, strikeZ);
+    scene.add(bolt);
+    projectiles.push({ kind: 'strike_bolt', mesh: bolt, life: 0.35 });
+
+    const impactPos = new THREE.Vector3(strikeX, 0.5, strikeZ);
+    for (const enemy of enemies) {
+      if (enemy.dead) continue;
+      const d = enemy.mesh.position.distanceTo(impactPos);
+      if (d <= radius) {
+        const falloff = 1 - d / radius;
+        damageEnemy(enemy, damage * (0.5 + falloff * 0.5));
+        applyImpactEffects(enemy, effects, intensity);
+      }
+    }
+
+    return true;
+  }
+
+  function castBeamFromConfig(spell) {
+    const liveEnemies = enemies.filter((enemy) => !enemy.dead);
+    if (!liveEnemies.length) {
+      onToast('No targets for beam');
+      return false;
+    }
+
+    if (beams.length >= 3) {
+      onToast('Too many active beams');
+      return false;
+    }
+
+    const damage = clamp(Number(spell?.numbers?.damage || 18), 4, 80);
+    const duration = clamp(Number(spell?.numbers?.durationSec || 2.5), 1, 6);
+    const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.3), 0.15, 0.8);
+    const beamLength = clamp(Number(spell?.numbers?.length || 35), 10, 80);
+    const beamWidth = clamp(Number(spell?.numbers?.width || 3), 1.5, 8);
+    const effects = Array.isArray(spell?.effects) ? spell.effects : [];
+    const element = spell?.element || 'fire';
+    const intensity = clamp(Number(spell?.vfx?.intensity || 1.0), 0.2, 1.4);
+    const elementColor = colorForElement(element);
+
+    const originX = commander.mesh.position.x;
+    const originZ = commander.mesh.position.z - 0.5;
+
+    const front = [...liveEnemies].sort((a, b) => b.mesh.position.z - a.mesh.position.z)[0];
+    const targetX = front ? laneX(front.lane) : originX;
+
+    const beamMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(beamWidth * 0.2, beamWidth * 0.25, beamLength, 8),
+      new THREE.MeshStandardMaterial({
+        color: elementColor.base,
+        emissive: elementColor.emissive,
+        emissiveIntensity: 1.5,
+        transparent: true,
+        opacity: 0.75,
+      })
+    );
+    beamMesh.rotation.x = Math.PI / 2;
+    beamMesh.position.set(
+      (originX + targetX) * 0.5,
+      1.8,
+      originZ - beamLength / 2
+    );
+    scene.add(beamMesh);
+
+    beams.push({
+      mesh: beamMesh,
+      originX,
+      originZ,
+      targetX,
+      beamLength,
+      beamWidth,
+      damage,
+      duration,
+      tickRate,
+      timer: 0,
+      effects,
+      intensity,
+    });
+
+    return true;
+  }
+
+  function updateBeams(dt) {
+    for (let i = beams.length - 1; i >= 0; i -= 1) {
+      const beam = beams[i];
+      beam.duration -= dt;
+      beam.timer += dt;
+
+      beam.mesh.material.opacity = clamp(beam.duration / 2.5, 0.15, 0.75);
+
+      while (beam.timer >= beam.tickRate) {
+        beam.timer -= beam.tickRate;
+        for (const enemy of enemies) {
+          if (enemy.dead) continue;
+          const ez = enemy.mesh.position.z;
+          const ex = enemy.mesh.position.x;
+          const inZ = ez <= beam.originZ && ez >= beam.originZ - beam.beamLength;
+          const beamXAtZ = beam.originX + (beam.targetX - beam.originX) * ((beam.originZ - ez) / beam.beamLength);
+          const inX = Math.abs(ex - beamXAtZ) <= beam.beamWidth * 0.6;
+          if (inZ && inX) {
+            damageEnemy(enemy, beam.damage * beam.tickRate);
+            applyImpactEffects(enemy, beam.effects, beam.intensity * 0.7);
+          }
+        }
+      }
+
+      if (beam.duration <= 0) {
+        scene.remove(beam.mesh);
+        beams.splice(i, 1);
+      }
+    }
+  }
+
   function castFromGeneratedSpell(spell) {
     if (!spell || typeof spell !== 'object') {
       return false;
@@ -557,6 +699,10 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
       casted = castZoneFromConfig(spell);
     } else if (archetype === 'chain') {
       casted = castChainFromConfig(spell);
+    } else if (archetype === 'strike') {
+      casted = castStrikeFromConfig(spell);
+    } else if (archetype === 'beam') {
+      casted = castBeamFromConfig(spell);
     } else {
       casted = castProjectileFromConfig(spell, archetype);
     }
@@ -1088,6 +1234,19 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
         continue;
       }
 
+      if (projectile.kind === 'strike_bolt') {
+        projectile.life -= dt;
+        const fade = clamp(projectile.life / 0.35, 0, 1);
+        projectile.mesh.material.opacity = fade * 0.92;
+        projectile.mesh.scale.x = 0.6 + fade * 0.4;
+        projectile.mesh.scale.z = 0.6 + fade * 0.4;
+        if (projectile.life <= 0) {
+          scene.remove(projectile.mesh);
+          projectiles.splice(i, 1);
+        }
+        continue;
+      }
+
       if (!projectile.target || projectile.target.dead || !enemies.includes(projectile.target)) {
         scene.remove(projectile.mesh);
         projectiles.splice(i, 1);
@@ -1289,6 +1448,11 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     }
     zones.length = 0;
 
+    for (const beam of beams) {
+      scene.remove(beam.mesh);
+    }
+    beams.length = 0;
+
     activeDots.clear();
     runtimeGoldMultipliers.clear();
     spawnTimer = 0;
@@ -1311,6 +1475,7 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     updateResources,
     updateWalls,
     updateZones,
+    updateBeams,
     updateEnemies,
     updateProjectiles,
     applyRuntimeCommand,
@@ -1319,6 +1484,7 @@ export function createEngineSystems({ scene, game, commander, laneX, rng, onToas
     enemies,
     walls,
     zones,
+    beams,
     projectiles,
   };
 }
