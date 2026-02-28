@@ -478,8 +478,9 @@ canvas {
 
 #historyPanel {
   position: fixed;
-  bottom: 90px;
-  width: 340px;
+  top: 14px;
+  right: 14px;
+  width: 300px;
   max-width: calc(100vw - 24px);
   border-radius: 10px;
   border: 1px solid var(--panel-border);
@@ -490,10 +491,6 @@ canvas {
   backdrop-filter: blur(5px);
 }
 
-#historyPanel {
-  left: 14px;
-}
-
 #historyPanel h3 {
   margin: 0 0 8px 0;
   font-size: 12px;
@@ -502,27 +499,11 @@ canvas {
   color: var(--muted);
 }
 
-#historyScript {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-#historyScript {
-  white-space: pre-wrap;
-  max-height: 130px;
-  overflow: auto;
-}
-
-.history-subtitle {
-  margin-top: 12px !important;
-}
-
 #spellHistoryList {
   margin: 0;
   padding: 0;
   list-style: none;
-  max-height: 145px;
+  max-height: 220px;
   overflow: auto;
 }
 
@@ -653,8 +634,9 @@ canvas {
   }
 
   #historyPanel {
-    left: 14px;
-    bottom: 420px;
+    top: 14px;
+    right: 14px;
+    left: auto;
   }
 
   #promptBar {

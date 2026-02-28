@@ -46,10 +46,6 @@ const GAME = {
   gameOver: false,
 };
 
-const BASELINE_HISTORY_TEXT =
-  `No applied prompts yet.\n` +
-  `Sandbox baseline: no generated ui/mechanics/units/actions.\n` +
-  `Template: ${PROMPT_TEMPLATE_VERSION}`;
 
 const SPELLS = {
   fireball: {
@@ -95,7 +91,6 @@ const dom = {
   applyStatus: document.getElementById('applyStatus'),
   commandWrap: document.getElementById('commandWrap'),
   commandInput: document.getElementById('commandInput'),
-  historyScript: document.getElementById('historyScript'),
   spellHistoryList: document.getElementById('spellHistoryList'),
   promptInput: document.getElementById('promptInput'),
   cancelSpellQueueBtn: document.getElementById('cancelSpellQueueBtn'),
@@ -177,10 +172,7 @@ const promptProcessor = new PromptProcessor(
     onStatus: (message) => {
       dom.applyStatus.textContent = message;
     },
-    onHistoryUpdated: () => {
-      const script = promptProcessor.getReplayScript();
-      dom.historyScript.textContent = script.length > 0 ? script : BASELINE_HISTORY_TEXT;
-    },
+    onHistoryUpdated: () => {},
   },
   {
     generationMode: import.meta.env.VITE_GENERATION_MODE ?? 'openai-api-key',
@@ -1202,7 +1194,6 @@ function setupPromptUi() {
 
   dom.queueStatus.textContent = `Queue: ${promptProcessor.getQueueSize()}`;
   dom.applyStatus.textContent = 'No prompt applied yet';
-  dom.historyScript.textContent = BASELINE_HISTORY_TEXT;
   renderSpellHistory();
   syncSpellQueueUi();
 }
