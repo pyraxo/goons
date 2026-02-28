@@ -28,6 +28,73 @@ test('accepts a valid spell draft', () => {
   assert.ok(result.spell.cost.mana >= 8);
 });
 
+test('includes name, description, and enriched vfx fields with defaults', () => {
+  const result = validateAndFinalizeSpell(
+    {
+      archetype: 'projectile',
+      element: 'storm',
+      targeting: { mode: 'nearest' },
+      numbers: { damage: 20, radius: 1.5, durationSec: 0 },
+      effects: ['stun'],
+      vfx: { palette: 'ion', intensity: 0.8, shape: 'orb' },
+      sfx: { cue: 'zap' },
+    },
+    baseContext
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(typeof result.spell.name, 'string');
+  assert.ok(result.spell.name.length >= 2);
+  assert.equal(typeof result.spell.description, 'string');
+  assert.ok(result.spell.description.length >= 8);
+  assert.match(result.spell.vfx.primaryColor, /^#[0-9a-f]{6}$/);
+  assert.match(result.spell.vfx.secondaryColor, /^#[0-9a-f]{6}$/);
+  assert.equal(typeof result.spell.vfx.trailEffect, 'string');
+  assert.equal(typeof result.spell.vfx.impactEffect, 'string');
+  assert.equal(typeof result.spell.vfx.particleDensity, 'number');
+  assert.equal(typeof result.spell.vfx.screenShake, 'number');
+  assert.equal(typeof result.spell.castStyle, 'string');
+});
+
+test('preserves LLM-provided creative fields', () => {
+  const result = validateAndFinalizeSpell(
+    {
+      name: 'Pyroclastic Ruin',
+      description: 'A molten boulder tears through the sky and obliterates everything on impact.',
+      archetype: 'aoe_burst',
+      element: 'fire',
+      targeting: { mode: 'nearest' },
+      numbers: { damage: 55, radius: 3.0, durationSec: 0, speed: 30 },
+      effects: ['burn'],
+      vfx: {
+        palette: 'magma',
+        intensity: 1.2,
+        shape: 'orb',
+        primaryColor: '#ff3300',
+        secondaryColor: '#ffaa22',
+        trailEffect: 'ember_trail',
+        impactEffect: 'explosion',
+        particleDensity: 1.6,
+        screenShake: 0.7,
+      },
+      sfx: { cue: 'meteor-crash' },
+      castStyle: 'slam',
+    },
+    baseContext
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.spell.name, 'Pyroclastic Ruin');
+  assert.ok(result.spell.description.includes('molten'));
+  assert.equal(result.spell.vfx.primaryColor, '#ff3300');
+  assert.equal(result.spell.vfx.secondaryColor, '#ffaa22');
+  assert.equal(result.spell.vfx.trailEffect, 'ember_trail');
+  assert.equal(result.spell.vfx.impactEffect, 'explosion');
+  assert.equal(result.spell.vfx.particleDensity, 1.6);
+  assert.equal(result.spell.vfx.screenShake, 0.7);
+  assert.equal(result.spell.castStyle, 'slam');
+});
+
 test('accepts high-power spell and derives capped cost', () => {
   const result = validateAndFinalizeSpell(
     {
@@ -72,6 +139,10 @@ test('deterministic fallback maps volcano to fireball-like archetype', () => {
   assert.equal(result.ok, true);
   assert.equal(result.spell.archetype, 'aoe_burst');
   assert.equal(result.spell.element, 'fire');
+  assert.equal(typeof result.spell.name, 'string');
+  assert.ok(result.spell.name.length > 0);
+  assert.equal(typeof result.spell.vfx.primaryColor, 'string');
+  assert.equal(typeof result.spell.castStyle, 'string');
 });
 
 test('fallback remains deterministic with same prompt/context', () => {

@@ -297,7 +297,7 @@ function sanitizeDraft(draft, context, warnings) {
     ? draft.castStyle
     : defaultCastStyle(archetype);
 
-  const spellName = sanitizeText(draft?.name, defaultSpellName(archetype, element), 40);
+  const spellName = sanitizeFlavorText(draft?.name, defaultSpellName(archetype, element), 40);
   const spellDescription = sanitizeFlavorText(
     draft?.description,
     `A ${element} ${archetype.replace('_', ' ')} spell.`,

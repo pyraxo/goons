@@ -228,6 +228,13 @@ CREATIVE PRIORITIES (most important):
 - particleDensity should match spectacle: subtle precision spells ~0.5, dramatic area spells ~1.5.
 - castStyle shapes the launch animation: launch for thrown projectiles, slam for ground impacts, channel for beams, sweep for wide arcs, pulse for radial bursts.
 
+ARCHETYPE-SPECIFIC VFX DESIGN (critical for visual quality):
+- zone_control + wave shape (lane_sweep pattern): These render as a multi-layered wave with a bright crest on top and foam at the leading edge. Choose a saturated, rich primaryColor for the wave body and a lighter/brighter secondaryColor for the crest and spray particles. Use high particleDensity (1.2-1.8) for spectacular sweeps. impactEffect should be 'ripple' for water/ice or 'explosion' for fire/earth sweeps. screenShake 0.3-0.6. castStyle 'sweep' or 'slam'. Set laneSpan 2-4 for wide sweeps, speed 10-20.
+- zone_control + ring shape (lane_circle pattern): These render as a glowing ground disc with a pulsing outer ring and counter-rotating inner ring. Use contrasting primaryColor/secondaryColor that create a visible glow boundary (e.g. deep blue + bright cyan, dark purple + pink). impactEffect 'ripple' or 'vortex'. particleDensity 1.0-1.5 for rising zone particles. screenShake 0.2-0.4. castStyle 'pulse' or 'slam'.
+- zone_control + wall shape: These render as solid barriers with magical shimmer and glow. Use earthy/solid primaryColor with a magical secondaryColor for the emissive glow edge. impactEffect 'ripple' or 'pillar'. Low particleDensity (0.4-0.8). castStyle 'slam'. intensity 0.6-0.8.
+- chain archetype: Renders as lightning arcs between targets. Use bright, electric primaryColor with white or pale secondaryColor for maximum contrast. trailEffect 'lightning_arc'. impactEffect 'flash'. intensity 1.0+. castStyle 'pulse'.
+- projectile/aoe_burst: Single projectile with trail particles and impact explosion. Vivid element-matching colors. impactEffect 'explosion' for fire/earth, 'shatter' for ice, 'flash' for arcane/storm. screenShake 0.4-0.7 for bursts. particleDensity 1.2+ for trails. castStyle 'launch'.
+
 MECHANICAL RULES:
 - Return exactly one craft_spell tool call.
 - Use targeting.pattern/targeting.singleTarget and numbers.width/numbers.length to match prompt geometry.

@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import { handleSpellGenerate } from './spell-api.js';
 
 const draft = {
+  name: 'Thundertide Lance',
+  description: 'A crackling spear of compressed storm energy that pierces through the frontline.',
   archetype: 'projectile',
   element: 'storm',
   targeting: { mode: 'nearest' },
   numbers: { damage: 26, radius: 1.8, durationSec: 0, speed: 24 },
   effects: ['slow'],
-  vfx: { palette: 'foam', intensity: 0.8, shape: 'orb' },
+  vfx: { palette: 'foam', intensity: 0.8, shape: 'orb', primaryColor: '#88ddff', secondaryColor: '#ffffff', trailEffect: 'lightning_arc', impactEffect: 'flash', particleDensity: 1.0, screenShake: 0.2 },
   sfx: { cue: 'wave-cast' },
+  castStyle: 'launch',
 };
 
 const baseRequest = {

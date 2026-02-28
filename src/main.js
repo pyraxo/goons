@@ -35,6 +35,7 @@ const SPELL_API_TARGETS = {
   backend: 'backend',
 };
 const DIRECT_SPELL_BACKEND_ORIGIN = import.meta.env.VITE_SPELL_BACKEND_ORIGIN || 'http://127.0.0.1:8787';
+const MAX_SPELL_HISTORY_ITEMS = 18;
 
 const GAME = {
   baseHp: 260,
@@ -89,7 +90,8 @@ const enemies = [];
 const projectiles = [];
 const walls = [];
 const zones = [];
-let spellRequestInFlight = false;
+const spellQueue = [];
+let spellQueueProcessing = false;
 
 const dom = {
   baseHp: document.getElementById('baseHp'),
@@ -107,6 +109,7 @@ const dom = {
   preview: document.getElementById('preview'),
   previewBody: document.getElementById('previewBody'),
   historyScript: document.getElementById('historyScript'),
+  spellHistoryList: document.getElementById('spellHistoryList'),
   promptInput: document.getElementById('promptInput'),
   spellApiTarget: document.getElementById('spellApiTarget'),
   modelPreset: document.getElementById('modelPreset'),
@@ -198,6 +201,13 @@ let spawnTimer = 0;
 let waveTimer = 0;
 let lastTime = performance.now();
 let toastTimer = 0;
+const spellHistory = [];
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 window.addEventListener('resize', onResize);
 window.addEventListener('keydown', onKeyDown);
@@ -671,6 +681,7 @@ function setupPromptUi() {
   dom.queueStatus.textContent = `Queue: ${promptProcessor.getQueueSize()}`;
   dom.applyStatus.textContent = 'No prompt applied yet';
   dom.historyScript.textContent = BASELINE_HISTORY_TEXT;
+  renderSpellHistory();
 }
 
 function renderEstimate(estimate) {
@@ -746,14 +757,46 @@ function getReservedGold() {
 }
 
 async function castFromPrompt(rawPrompt) {
-  if (GAME.globalCooldown > 0) {
-    setToast('Global cooldown active');
+  const historyId = appendSpellHistory(rawPrompt);
+  spellQueue.push({ rawPrompt, historyId });
+  const queuedAhead = spellQueue.length - 1;
+  if (queuedAhead > 0) {
+    dom.applyStatus.textContent = `Spell queued (${queuedAhead} ahead)`;
+  }
+  void processSpellQueue();
+}
+
+async function processSpellQueue() {
+  if (spellQueueProcessing) {
     return;
   }
 
-  if (spellRequestInFlight) {
-    setToast('Spellcrafting in progress');
+  spellQueueProcessing = true;
+  try {
+    while (spellQueue.length > 0) {
+      const next = spellQueue.shift();
+      if (!next) {
+        continue;
+      }
+      await castQueuedSpell(next.rawPrompt, next.historyId);
+    }
+  } finally {
+    spellQueueProcessing = false;
+  }
+}
+
+async function castQueuedSpell(rawPrompt, historyId) {
+  if (GAME.gameOver) {
+    updateSpellHistory(historyId, 'failed', 'Game over');
     return;
+  }
+
+  while (GAME.globalCooldown > 0) {
+    if (GAME.gameOver) {
+      updateSpellHistory(historyId, 'failed', 'Game over');
+      return;
+    }
+    await sleep(25);
   }
 
   const payload = {
@@ -772,7 +815,6 @@ async function castFromPrompt(rawPrompt) {
       })),
   };
 
-  spellRequestInFlight = true;
   try {
     const response = await fetch(getSpellGenerateEndpoint(), {
       method: 'POST',
@@ -785,24 +827,29 @@ async function castFromPrompt(rawPrompt) {
     }
 
     const json = await response.json();
-    const casted = castFromConfig(json?.spell);
-    if (!casted) {
+    const castResult = castFromConfig(json?.spell);
+    if (!castResult.casted) {
+      updateSpellHistory(historyId, 'failed', castResult.reason || 'Spell could not be cast');
       return;
     }
 
     if (json?.source === 'fallback') {
       const reason = json?.meta?.fallbackReason ? ` (${json.meta.fallbackReason})` : '';
       setToast(`Fallback cast${reason}`);
+      updateSpellHistory(
+        historyId,
+        'casted',
+        `Fallback ${json?.spell?.name || json?.spell?.archetype || 'spell'}${reason}`
+      );
       console.warn('[spell] fallback', {
         reason: json?.meta?.fallbackReason || null,
         warnings: json?.meta?.warnings || [],
         latencyMs: json?.meta?.latencyMs,
       });
     } else {
-      const effectText = Array.isArray(json?.spell?.effects) && json.spell.effects.length
-        ? json.spell.effects.join('+')
-        : 'none';
-      setToast(`LLM: ${json?.spell?.archetype || 'spell'}/${effectText}`);
+      const spellName = json?.spell?.name || json?.spell?.archetype || 'spell';
+      setToast(spellName);
+      updateSpellHistory(historyId, 'casted', spellName);
     }
   } catch (error) {
     console.warn('[main] spell generation failed', error);
@@ -810,8 +857,7 @@ async function castFromPrompt(rawPrompt) {
     const endpoint = getSpellGenerateEndpoint();
     dom.applyStatus.textContent = `Spell API request failed (${endpoint}): ${message}`;
     setToast('Spell engine unavailable');
-  } finally {
-    spellRequestInFlight = false;
+    updateSpellHistory(historyId, 'failed', `Spell API failed: ${message}`);
   }
 }
 
@@ -828,7 +874,10 @@ function isSpellApiBackendSelected() {
 
 function castFromConfig(spell) {
   if (!spell || typeof spell !== 'object') {
-    return false;
+    return {
+      casted: false,
+      reason: 'Invalid spell payload',
+    };
   }
 
   const archetype = String(spell.archetype || 'projectile');
@@ -840,12 +889,18 @@ function castFromConfig(spell) {
 
   if (spellCd > 0) {
     setToast(`${archetype} cooldown ${spellCd.toFixed(1)}s`);
-    return false;
+    return {
+      casted: false,
+      reason: `${archetype} cooldown ${spellCd.toFixed(1)}s`,
+    };
   }
 
   if (GAME.mana < manaCost) {
     setToast('Not enough mana');
-    return false;
+    return {
+      casted: false,
+      reason: 'Not enough mana',
+    };
   }
 
   let casted = false;
@@ -858,14 +913,103 @@ function castFromConfig(spell) {
   }
 
   if (!casted) {
-    return false;
+    return {
+      casted: false,
+      reason: 'No valid target or spell effect failed',
+    };
   }
 
   GAME.mana -= manaCost;
   spellCooldowns.set(archetype, cooldown);
   GAME.globalCooldown = 0.2;
   refreshHud();
-  return true;
+  return {
+    casted: true,
+    reason: '',
+  };
+}
+
+function appendSpellHistory(prompt) {
+  const entry = {
+    id: `spell_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    prompt: String(prompt || '').trim() || '(empty prompt)',
+    status: 'queued',
+    detail: '',
+    updatedAt: Date.now(),
+  };
+
+  spellHistory.unshift(entry);
+  if (spellHistory.length > MAX_SPELL_HISTORY_ITEMS) {
+    spellHistory.length = MAX_SPELL_HISTORY_ITEMS;
+  }
+
+  renderSpellHistory();
+  return entry.id;
+}
+
+function updateSpellHistory(id, status, detail = '') {
+  const entry = spellHistory.find((item) => item.id === id);
+  if (!entry) {
+    return;
+  }
+
+  entry.status = status;
+  entry.detail = String(detail || '').trim();
+  entry.updatedAt = Date.now();
+  renderSpellHistory();
+}
+
+function renderSpellHistory() {
+  const container = dom.spellHistoryList;
+  if (!container) {
+    return;
+  }
+
+  container.textContent = '';
+
+  if (spellHistory.length === 0) {
+    const item = document.createElement('li');
+    item.className = 'spell-history-empty';
+    item.textContent = 'No spell casts yet.';
+    container.append(item);
+    return;
+  }
+
+  for (const entry of spellHistory) {
+    const item = document.createElement('li');
+    item.className = 'spell-history-item';
+
+    const time = document.createElement('span');
+    time.className = 'spell-history-time';
+    time.textContent = formatSpellHistoryTime(entry.updatedAt);
+
+    const status = document.createElement('span');
+    status.className = `spell-status spell-status-${entry.status}`;
+    status.textContent = entry.status;
+
+    const prompt = document.createElement('span');
+    prompt.className = 'spell-history-prompt';
+    prompt.textContent = entry.prompt;
+
+    item.append(time, status, prompt);
+
+    if (entry.detail) {
+      const detail = document.createElement('div');
+      detail.className = 'spell-history-detail';
+      detail.textContent = entry.detail;
+      item.append(detail);
+    }
+
+    container.append(item);
+  }
+}
+
+function formatSpellHistoryTime(timestamp) {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 function parseSpell(prompt) {
@@ -969,6 +1113,319 @@ function castBolt() {
   });
 }
 
+const trailParticles = [];
+const impactFlashes = [];
+let shakeIntensity = 0;
+let shakeDecay = 0;
+const zoneParticles = [];
+const cameraBasePosition = new THREE.Vector3(0, 46, 42);
+
+function parseHexColor(hex) {
+  if (typeof hex !== 'string') return null;
+  const clean = hex.replace('#', '');
+  if (clean.length !== 6) return null;
+  return Number.parseInt(clean, 16);
+}
+
+function spawnTrailParticle(position, spell) {
+  const vfx = spell?.vfx || {};
+  const density = clamp(Number(vfx.particleDensity) || 1.0, 0.2, 2.0);
+  if (Math.random() > density * 0.4) return;
+
+  const color = parseHexColor(vfx.secondaryColor) || parseHexColor(vfx.primaryColor) || 0xffffff;
+  const trail = vfx.trailEffect || 'spark';
+  let geo;
+  let size;
+
+  if (trail === 'ember_trail' || trail === 'spark') {
+    size = 0.12 + Math.random() * 0.18;
+    geo = new THREE.SphereGeometry(size, 4, 4);
+  } else if (trail === 'frost_mist' || trail === 'smoke') {
+    size = 0.25 + Math.random() * 0.35;
+    geo = new THREE.SphereGeometry(size, 5, 5);
+  } else if (trail === 'lightning_arc') {
+    size = 0.08 + Math.random() * 0.12;
+    geo = new THREE.CylinderGeometry(size * 0.3, size * 0.3, size * 4, 4);
+  } else if (trail === 'holy_motes' || trail === 'shadow_wisp') {
+    size = 0.1 + Math.random() * 0.15;
+    geo = new THREE.OctahedronGeometry(size, 0);
+  } else {
+    return;
+  }
+
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: trail === 'lightning_arc' ? 1.5 : 0.9,
+    transparent: true,
+    opacity: 0.85,
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(position);
+  mesh.position.x += (Math.random() - 0.5) * 0.6;
+  mesh.position.y += (Math.random() - 0.5) * 0.4;
+  mesh.position.z += (Math.random() - 0.5) * 0.6;
+  if (trail === 'lightning_arc') {
+    mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+  }
+  scene.add(mesh);
+
+  trailParticles.push({
+    mesh,
+    life: 0.25 + Math.random() * 0.35,
+    velY: (trail === 'ember_trail' || trail === 'spark') ? 1.5 + Math.random() * 2 : 0.3 + Math.random() * 0.6,
+    drift: (Math.random() - 0.5) * 1.2,
+    fadeRate: trail === 'smoke' || trail === 'frost_mist' ? 1.2 : 2.5,
+  });
+}
+
+function spawnImpactEffect(position, spell) {
+  const vfx = spell?.vfx || {};
+  const impact = vfx.impactEffect || 'flash';
+  const primary = parseHexColor(vfx.primaryColor) || 0xffffff;
+  const secondary = parseHexColor(vfx.secondaryColor) || primary;
+  const density = clamp(Number(vfx.particleDensity) || 1.0, 0.2, 2.0);
+
+  if (impact === 'explosion') {
+    const count = Math.floor(8 * density);
+    for (let i = 0; i < count; i++) {
+      const size = 0.2 + Math.random() * 0.4;
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(size, 5, 5),
+        new THREE.MeshStandardMaterial({
+          color: i % 2 === 0 ? primary : secondary,
+          emissive: primary,
+          emissiveIntensity: 1.2,
+          transparent: true,
+          opacity: 1,
+        })
+      );
+      mesh.position.copy(position);
+      const angle = (i / count) * Math.PI * 2;
+      const speed = 4 + Math.random() * 6;
+      scene.add(mesh);
+      impactFlashes.push({
+        mesh,
+        life: 0.3 + Math.random() * 0.25,
+        velX: Math.cos(angle) * speed,
+        velY: 2 + Math.random() * 4,
+        velZ: Math.sin(angle) * speed,
+      });
+    }
+    const coreFlash = new THREE.Mesh(
+      new THREE.SphereGeometry(1.5, 10, 10),
+      new THREE.MeshStandardMaterial({
+        color: secondary,
+        emissive: secondary,
+        emissiveIntensity: 2,
+        transparent: true,
+        opacity: 0.9,
+      })
+    );
+    coreFlash.position.copy(position);
+    scene.add(coreFlash);
+    impactFlashes.push({ mesh: coreFlash, life: 0.18, velX: 0, velY: 0, velZ: 0 });
+  } else if (impact === 'shatter') {
+    const count = Math.floor(6 * density);
+    for (let i = 0; i < count; i++) {
+      const size = 0.15 + Math.random() * 0.25;
+      const mesh = new THREE.Mesh(
+        new THREE.TetrahedronGeometry(size),
+        new THREE.MeshStandardMaterial({
+          color: i % 3 === 0 ? secondary : primary,
+          emissive: primary,
+          emissiveIntensity: 0.8,
+          transparent: true,
+          opacity: 1,
+        })
+      );
+      mesh.position.copy(position);
+      const angle = (i / count) * Math.PI * 2;
+      const speed = 3 + Math.random() * 5;
+      scene.add(mesh);
+      impactFlashes.push({
+        mesh,
+        life: 0.35 + Math.random() * 0.3,
+        velX: Math.cos(angle) * speed,
+        velY: 3 + Math.random() * 5,
+        velZ: Math.sin(angle) * speed,
+      });
+    }
+  } else if (impact === 'ripple') {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.3, 0.6, 24),
+      new THREE.MeshStandardMaterial({
+        color: primary,
+        emissive: primary,
+        emissiveIntensity: 1.5,
+        transparent: true,
+        opacity: 0.8,
+        side: THREE.DoubleSide,
+      })
+    );
+    ring.position.copy(position);
+    ring.position.y = 0.15;
+    ring.rotation.x = -Math.PI / 2;
+    scene.add(ring);
+    impactFlashes.push({ mesh: ring, life: 0.5, velX: 0, velY: 0, velZ: 0, isRipple: true });
+  } else if (impact === 'vortex') {
+    for (let i = 0; i < 3; i++) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.4 + i * 0.3, 0.08, 8, 16),
+        new THREE.MeshStandardMaterial({
+          color: i === 0 ? primary : secondary,
+          emissive: primary,
+          emissiveIntensity: 1.0,
+          transparent: true,
+          opacity: 0.8,
+        })
+      );
+      ring.position.copy(position);
+      ring.position.y += i * 0.5;
+      scene.add(ring);
+      impactFlashes.push({ mesh: ring, life: 0.4 + i * 0.1, velX: 0, velY: 1.5, velZ: 0, isVortex: true, spin: 6 + i * 3 });
+    }
+  } else if (impact === 'pillar') {
+    const pillar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.4, 0.6, 8, 8),
+      new THREE.MeshStandardMaterial({
+        color: primary,
+        emissive: secondary,
+        emissiveIntensity: 1.5,
+        transparent: true,
+        opacity: 0.85,
+      })
+    );
+    pillar.position.copy(position);
+    pillar.position.y = 4;
+    scene.add(pillar);
+    impactFlashes.push({ mesh: pillar, life: 0.35, velX: 0, velY: 0, velZ: 0 });
+  } else {
+    const flash = new THREE.Mesh(
+      new THREE.SphereGeometry(0.8, 8, 8),
+      new THREE.MeshStandardMaterial({
+        color: primary,
+        emissive: secondary,
+        emissiveIntensity: 2,
+        transparent: true,
+        opacity: 1,
+      })
+    );
+    flash.position.copy(position);
+    scene.add(flash);
+    impactFlashes.push({ mesh: flash, life: 0.15, velX: 0, velY: 0, velZ: 0 });
+  }
+
+  const shake = clamp(Number(vfx.screenShake) || 0, 0, 1);
+  if (shake > 0) {
+    shakeIntensity = Math.max(shakeIntensity, shake);
+    shakeDecay = 0.35;
+  }
+}
+
+function updateTrailParticles(dt) {
+  for (let i = trailParticles.length - 1; i >= 0; i--) {
+    const p = trailParticles[i];
+    p.life -= dt;
+    p.mesh.position.y += p.velY * dt;
+    p.mesh.position.x += p.drift * dt;
+    p.mesh.material.opacity = Math.max(0, p.mesh.material.opacity - p.fadeRate * dt);
+    if (p.life <= 0 || p.mesh.material.opacity <= 0) {
+      scene.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      trailParticles.splice(i, 1);
+    }
+  }
+}
+
+function updateImpactFlashes(dt) {
+  for (let i = impactFlashes.length - 1; i >= 0; i--) {
+    const f = impactFlashes[i];
+    f.life -= dt;
+    f.mesh.position.x += f.velX * dt;
+    f.mesh.position.y += f.velY * dt;
+    f.mesh.position.z += f.velZ * dt;
+    if (f.velY !== 0 && !f.isRipple && !f.isVortex) {
+      f.velY -= 12 * dt;
+    }
+    if (f.isRipple) {
+      f.mesh.scale.multiplyScalar(1 + dt * 8);
+    }
+    if (f.isVortex) {
+      f.mesh.rotation.y += (f.spin || 6) * dt;
+      f.mesh.scale.multiplyScalar(1 + dt * 3);
+    }
+    const fadeProgress = Math.max(0, f.life / 0.4);
+    f.mesh.material.opacity = fadeProgress;
+    if (f.life <= 0) {
+      scene.remove(f.mesh);
+      f.mesh.geometry.dispose();
+      f.mesh.material.dispose();
+      impactFlashes.splice(i, 1);
+    }
+  }
+}
+
+function updateScreenShake(dt) {
+  if (shakeIntensity <= 0) return;
+  shakeDecay -= dt;
+  if (shakeDecay <= 0) {
+    shakeIntensity = 0;
+    camera.position.copy(cameraBasePosition);
+    return;
+  }
+  const factor = shakeIntensity * (shakeDecay / 0.35);
+  camera.position.x = cameraBasePosition.x + (Math.random() - 0.5) * factor * 1.5;
+  camera.position.y = cameraBasePosition.y + (Math.random() - 0.5) * factor * 0.8;
+}
+
+function spawnZoneParticle(position, vfx, mode) {
+  if (zoneParticles.length >= 120) return;
+  const color = parseHexColor(vfx?.secondaryColor) || parseHexColor(vfx?.primaryColor) || 0xffffff;
+  const size = mode === 'spray' ? 0.1 + Math.random() * 0.15 : 0.08 + Math.random() * 0.12;
+  const geo = mode === 'spray'
+    ? new THREE.SphereGeometry(size, 4, 4)
+    : new THREE.OctahedronGeometry(size, 0);
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: mode === 'spray' ? 1.2 : 0.8,
+    transparent: true,
+    opacity: 0.75,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(position);
+  scene.add(mesh);
+  const life = mode === 'spray' ? 0.3 + Math.random() * 0.3 : 0.6 + Math.random() * 0.5;
+  zoneParticles.push({
+    mesh,
+    life,
+    velY: mode === 'spray' ? 2 + Math.random() * 3 : 1.2 + Math.random() * 2,
+    driftX: mode === 'spray' ? (Math.random() - 0.5) * 3 : (Math.random() - 0.5) * 0.8,
+    driftZ: mode === 'spray' ? -(1 + Math.random() * 2) : (Math.random() - 0.5) * 0.5,
+    fadeRate: 1 / life,
+  });
+}
+
+function updateZoneParticles(dt) {
+  for (let i = zoneParticles.length - 1; i >= 0; i--) {
+    const p = zoneParticles[i];
+    p.life -= dt;
+    p.mesh.position.y += p.velY * dt;
+    p.mesh.position.x += p.driftX * dt;
+    p.mesh.position.z += p.driftZ * dt;
+    p.mesh.material.opacity = Math.max(0, p.life * p.fadeRate);
+    if (p.life <= 0) {
+      scene.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      zoneParticles.splice(i, 1);
+    }
+  }
+}
+
 function projectileGeometryForShape(shape, baseRadius) {
   if (shape === 'ring') {
     return new THREE.TorusGeometry(baseRadius, Math.max(0.08, baseRadius * 0.3), 10, 18);
@@ -994,11 +1451,16 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
   const shapeSize = clamp(Number(spell?.vfx?.size ?? 1), 0.4, 2.2);
   const baseRadius = (archetype === 'aoe_burst' ? 0.62 : 0.5) * shapeSize;
   const elementColor = colorForElement(spell?.element);
+  const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
+  const secondaryHex = parseHexColor(spell?.vfx?.secondaryColor);
+  const mainColor = primaryHex ?? elementColor.base;
+  const glowColor = secondaryHex ?? elementColor.emissive;
+
   const projectileMesh = new THREE.Mesh(
     projectileGeometryForShape(shape, baseRadius),
     new THREE.MeshStandardMaterial({
-      color: elementColor.base,
-      emissive: elementColor.emissive,
+      color: mainColor,
+      emissive: glowColor,
       emissiveIntensity: 0.55 + power * 0.45,
     })
   );
@@ -1008,6 +1470,10 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
   }
   projectileMesh.castShadow = true;
   scene.add(projectileMesh);
+
+  const glowLight = new THREE.PointLight(mainColor, power * 2.5, 6);
+  glowLight.position.set(0, 0, 0);
+  projectileMesh.add(glowLight);
 
   projectiles.push({
     kind: archetype,
@@ -1027,6 +1493,8 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
     effects: Array.isArray(spell?.effects) ? spell.effects : [],
     element: spell?.element || 'arcane',
     intensity: power,
+    spellVfx: spell?.vfx || null,
+    glowLight,
   });
 
   return true;
@@ -1039,7 +1507,9 @@ function castZoneFromConfig(spell) {
   const tickRate = clamp(Number(spell?.numbers?.tickRate || 0.8), 0.2, 2);
   const effects = Array.isArray(spell?.effects) ? spell.effects : [];
   const element = spell?.element || 'arcane';
-  const color = zoneColorForSpell(spell, colorForElement(element).base);
+  const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
+  const baseColor = primaryHex ?? colorForElement(element).base;
+  const color = zoneColorForSpell(spell, baseColor);
   const shape = String(spell?.vfx?.shape || 'ring');
   const targetingPattern = String(spell?.targeting?.pattern || '');
   const width = clamp(Number(spell?.numbers?.width || radius * 2), 1, MAP_WIDTH - 2);
@@ -1056,13 +1526,22 @@ function castZoneFromConfig(spell) {
       return false;
     }
 
+    const wallAccent = parseHexColor(spell?.vfx?.secondaryColor) ?? colorForElement(element).emissive;
     const wall = new THREE.Mesh(
       new THREE.BoxGeometry(5.6, 3.6, 1.2),
-      new THREE.MeshStandardMaterial({ color, roughness: 0.92 })
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive: wallAccent,
+        emissiveIntensity: 0.15,
+        roughness: 0.85,
+      })
     );
     wall.position.set(laneX(lane), 1.8, z);
     wall.castShadow = true;
     wall.receiveShadow = true;
+    const wallGlow = new THREE.PointLight(wallAccent, 1.2, 8);
+    wallGlow.position.set(0, 0.5, 0);
+    wall.add(wallGlow);
     scene.add(wall);
     const wallHp = clamp(100 + damage * 1.2 + duration * 9, 80, 240);
     walls.push({
@@ -1097,25 +1576,68 @@ function castZoneFromConfig(spell) {
     const laneCoverage = laneBounds.laneMax - laneBounds.laneMin + 1;
     const waveWidth = clamp(Math.max(width, laneCoverage * LANE_SPACING - 1.4), 6, MAP_WIDTH - 2);
     const hitDepth = clamp(radius, 1, 5);
-    const wave = new THREE.Mesh(
-      new THREE.BoxGeometry(waveWidth, 2.8, Math.max(1.2, hitDepth * 2)),
+    const waveAccent = parseHexColor(spell?.vfx?.secondaryColor) ?? colorForElement(element).emissive;
+
+    const waveGroup = new THREE.Group();
+    waveGroup.position.set(centerX, 0, z);
+
+    const bodyMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(waveWidth, 2.2, Math.max(1.4, hitDepth * 2)),
       new THREE.MeshStandardMaterial({
         color,
         emissive: color,
-        emissiveIntensity: 0.32,
+        emissiveIntensity: 0.38,
         transparent: true,
-        opacity: 0.68,
+        opacity: 0.52,
       })
     );
-    wave.position.set(centerX, 1.45, z);
-    wave.castShadow = true;
-    scene.add(wave);
+    bodyMesh.position.y = 1.1;
+    bodyMesh.castShadow = true;
+    waveGroup.add(bodyMesh);
+
+    const crestMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.5, 0.7, waveWidth * 0.88, 14),
+      new THREE.MeshStandardMaterial({
+        color: waveAccent,
+        emissive: waveAccent,
+        emissiveIntensity: 0.9,
+        transparent: true,
+        opacity: 0.65,
+      })
+    );
+    crestMesh.rotation.z = Math.PI / 2;
+    crestMesh.position.set(0, 2.55, -(hitDepth * 0.45));
+    waveGroup.add(crestMesh);
+
+    const foamMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(waveWidth * 0.8, 1.8),
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        emissive: waveAccent,
+        emissiveIntensity: 0.45,
+        transparent: true,
+        opacity: 0.22,
+        side: THREE.DoubleSide,
+      })
+    );
+    foamMesh.rotation.x = -Math.PI / 2;
+    foamMesh.position.set(0, 0.05, -(hitDepth + 0.5));
+    waveGroup.add(foamMesh);
+
+    const waveGlow = new THREE.PointLight(color, 2, 14);
+    waveGlow.position.set(0, 2.2, 0);
+    waveGroup.add(waveGlow);
+
+    scene.add(waveGroup);
 
     const travelSpeed = clamp(Number(spell?.numbers?.speed || 14), 6, 26);
     const travelLength = clamp(length, 8, 90);
     zones.push({
       kind: 'wave',
-      mesh: wave,
+      mesh: waveGroup,
+      bodyMesh,
+      crestMesh,
+      foamMesh,
       laneMin: laneBounds.laneMin,
       laneMax: laneBounds.laneMax,
       radius: hitDepth,
@@ -1123,6 +1645,7 @@ function castZoneFromConfig(spell) {
       minZ: z - travelLength,
       damage,
       duration,
+      initialDuration: duration,
       tickRate,
       effects,
       element,
@@ -1130,12 +1653,34 @@ function castZoneFromConfig(spell) {
       pushPerSecond: clamp(7 + Number(spell?.vfx?.intensity || 0.9) * 8, 5, 20),
       timer: 0,
       isLinkedWall: false,
+      spellVfx: spell?.vfx || null,
     });
   } else {
     const halfWidth = clamp(Math.max(width * 0.5, laneBounds.span * 3.1), 2.2, MAP_WIDTH * 0.45);
     const halfLength = clamp(Math.max(length * 0.5, radius), 1.4, 12);
     const visibility = clamp(Number(spell?.vfx?.visibility ?? 1), 0.4, 2.2);
-    const ring = new THREE.Mesh(
+    const ringAccent = parseHexColor(spell?.vfx?.secondaryColor) ?? colorForElement(element).emissive;
+
+    const ringGroup = new THREE.Group();
+    ringGroup.position.set(centerX, 0, z);
+
+    const glowDisc = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 32),
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: clamp(0.3 + visibility * 0.2, 0.3, 0.8),
+        transparent: true,
+        opacity: clamp(0.18 + visibility * 0.08, 0.15, 0.35),
+        side: THREE.DoubleSide,
+      })
+    );
+    glowDisc.rotation.x = -Math.PI / 2;
+    glowDisc.scale.set(halfWidth * 0.92, halfLength * 0.92, 1);
+    glowDisc.position.y = 0.04;
+    ringGroup.add(glowDisc);
+
+    const ringMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(1, 1, 0.45, 24, 1, true),
       new THREE.MeshStandardMaterial({
         color,
@@ -1145,23 +1690,50 @@ function castZoneFromConfig(spell) {
         opacity: clamp(0.58 + visibility * 0.18, 0.55, 0.95),
       })
     );
-    ring.scale.set(halfWidth, 1, halfLength);
-    ring.position.set(centerX, 0.24, z);
-    scene.add(ring);
+    ringMesh.scale.set(halfWidth, 1, halfLength);
+    ringMesh.position.y = 0.24;
+    ringGroup.add(ringMesh);
+
+    const innerRing = new THREE.Mesh(
+      new THREE.CylinderGeometry(1, 1, 0.3, 20, 1, true),
+      new THREE.MeshStandardMaterial({
+        color: ringAccent,
+        emissive: ringAccent,
+        emissiveIntensity: clamp(0.4 + visibility * 0.3, 0.4, 1.0),
+        transparent: true,
+        opacity: clamp(0.3 + visibility * 0.12, 0.28, 0.55),
+      })
+    );
+    innerRing.scale.set(halfWidth * 0.55, 0.8, halfLength * 0.55);
+    innerRing.position.y = 0.22;
+    ringGroup.add(innerRing);
+
+    const zoneGlow = new THREE.PointLight(color, 1.5, 10);
+    zoneGlow.position.y = 0.6;
+    ringGroup.add(zoneGlow);
+
+    scene.add(ringGroup);
     zones.push({
       kind: 'ring',
-      mesh: ring,
+      mesh: ringGroup,
+      ringMesh,
+      glowDisc,
+      innerRing,
       laneMin: laneBounds.laneMin,
       laneMax: laneBounds.laneMax,
       radius: halfLength,
+      halfWidth,
+      halfLength,
       z,
       damage,
       duration,
+      initialDuration: duration,
       tickRate,
       effects,
       element,
       timer: 0,
       isLinkedWall: false,
+      spellVfx: spell?.vfx || null,
     });
   }
 
@@ -1171,6 +1743,11 @@ function castZoneFromConfig(spell) {
         enemy.frozenFor = Math.max(enemy.frozenFor, Math.min(2.6, duration));
       }
     }
+  }
+
+  if (spell?.vfx) {
+    const impactPos = new THREE.Vector3(centerX, 0.5, z);
+    spawnImpactEffect(impactPos, { vfx: spell.vfx });
   }
 
   return true;
@@ -1187,9 +1764,13 @@ function castChainFromConfig(spell) {
   const chainCount = clamp(Math.floor(Number(spell?.numbers?.chainCount || 3)), 2, 7);
   const effects = Array.isArray(spell?.effects) ? spell.effects : [];
   const sorted = [...liveEnemies].sort((a, b) => b.mesh.position.z - a.mesh.position.z).slice(0, chainCount);
+
+  const primaryHex = parseHexColor(spell?.vfx?.primaryColor);
+  const secondaryHex = parseHexColor(spell?.vfx?.secondaryColor);
+
   for (let i = 0; i < sorted.length; i += 1) {
     const enemy = sorted[i];
-    spawnZap(enemy.mesh.position, spell?.element);
+    spawnZap(enemy.mesh.position, spell?.element, primaryHex, secondaryHex);
     const falloff = 1 - i * 0.12;
     const dealt = damage * falloff;
     damageEnemy(enemy, dealt);
@@ -1204,6 +1785,16 @@ function castChainFromConfig(spell) {
         z: enemy.mesh.position.z + 1.35,
       },
     });
+
+    if (spell?.vfx && i === 0) {
+      spawnImpactEffect(enemy.mesh.position, { vfx: { ...spell.vfx, screenShake: (spell.vfx.screenShake || 0) * 0.5 } });
+    }
+  }
+
+  if (sorted.length >= 2) {
+    for (let i = 0; i < sorted.length - 1; i++) {
+      spawnChainArc(sorted[i].mesh.position, sorted[i + 1].mesh.position, primaryHex ?? colorForElement(spell?.element || 'storm').base);
+    }
   }
 
   return true;
@@ -1318,11 +1909,13 @@ function lanePressure() {
   return summary.sort((a, b) => b.value - a.value);
 }
 
-function spawnZap(pos, element = 'storm') {
+function spawnZap(pos, element = 'storm', primaryOverride = null, secondaryOverride = null) {
   const palette = colorForElement(element);
+  const mainColor = primaryOverride ?? palette.base;
+  const glowColor = secondaryOverride ?? palette.emissive;
   const bolt = new THREE.Mesh(
     new THREE.CylinderGeometry(0.15, 0.15, 5, 6),
-    new THREE.MeshStandardMaterial({ color: palette.base, emissive: palette.emissive, emissiveIntensity: 1.0 })
+    new THREE.MeshStandardMaterial({ color: mainColor, emissive: glowColor, emissiveIntensity: 1.0 })
   );
   bolt.position.set(pos.x, 2.6, pos.z);
   scene.add(bolt);
@@ -1331,6 +1924,28 @@ function spawnZap(pos, element = 'storm') {
     mesh: bolt,
     life: 0.18,
   });
+}
+
+function spawnChainArc(from, to, color) {
+  const midX = (from.x + to.x) / 2 + (Math.random() - 0.5) * 2;
+  const midY = Math.max(from.y, to.y) + 1.5 + Math.random() * 2;
+  const midZ = (from.z + to.z) / 2 + (Math.random() - 0.5) * 2;
+  const curve = new THREE.QuadraticBezierCurve3(
+    new THREE.Vector3(from.x, from.y + 1.5, from.z),
+    new THREE.Vector3(midX, midY, midZ),
+    new THREE.Vector3(to.x, to.y + 1.5, to.z)
+  );
+  const geo = new THREE.TubeGeometry(curve, 12, 0.06, 4, false);
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 2,
+    transparent: true,
+    opacity: 0.9,
+  });
+  const tube = new THREE.Mesh(geo, mat);
+  scene.add(tube);
+  impactFlashes.push({ mesh: tube, life: 0.2, velX: 0, velY: 0, velZ: 0 });
 }
 
 function spawnEnemy() {
@@ -1587,12 +2202,16 @@ function updateProjectiles(dt) {
     if (dir.lengthSq() <= step * step) {
       projectile.mesh.position.add(dir);
       explodeProjectile(projectile);
+      if (projectile.glowLight) projectile.mesh.remove(projectile.glowLight);
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
       continue;
     }
 
     projectile.mesh.position.add(dir.normalize().multiplyScalar(step));
+    if (projectile.spellVfx && projectile.spellVfx.trailEffect !== 'none') {
+      spawnTrailParticle(projectile.mesh.position, { vfx: projectile.spellVfx });
+    }
   }
 }
 
@@ -1616,14 +2235,18 @@ function explodeProjectile(projectile) {
     }
   }
 
-  const elementColor = colorForElement(projectile.element || 'fire');
-  const fx = new THREE.Mesh(
-    new THREE.SphereGeometry(0.7, 8, 8),
-    new THREE.MeshStandardMaterial({ color: elementColor.base, emissive: elementColor.emissive, emissiveIntensity: 1 })
-  );
-  fx.position.copy(point);
-  scene.add(fx);
-  projectiles.push({ kind: 'zap', mesh: fx, life: 0.24 });
+  if (projectile.spellVfx) {
+    spawnImpactEffect(point, { vfx: projectile.spellVfx });
+  } else {
+    const elementColor = colorForElement(projectile.element || 'fire');
+    const fx = new THREE.Mesh(
+      new THREE.SphereGeometry(0.7, 8, 8),
+      new THREE.MeshStandardMaterial({ color: elementColor.base, emissive: elementColor.emissive, emissiveIntensity: 1 })
+    );
+    fx.position.copy(point);
+    scene.add(fx);
+    projectiles.push({ kind: 'zap', mesh: fx, life: 0.24 });
+  }
 }
 
 function damageEnemy(enemy, amount) {
@@ -1708,6 +2331,9 @@ function updateWalls(dt) {
     }
 
     wall.mesh.scale.y = 0.72 + (wall.hp / wall.maxHp) * 0.28;
+    if (wall.mesh.material && wall.mesh.material.emissiveIntensity !== undefined) {
+      wall.mesh.material.emissiveIntensity = 0.12 + Math.sin(GAME.elapsed * 3 + i * 1.1) * 0.08;
+    }
   }
 }
 
@@ -1724,8 +2350,27 @@ function updateZones(dt) {
     if (zone.kind === 'wave') {
       zone.z -= zone.speed * dt;
       zone.mesh.position.z = zone.z;
-      zone.mesh.material.opacity = clamp(0.2 + (zone.duration / 6) * 0.5, 0.18, 0.72);
-      zone.mesh.rotation.x = Math.sin(GAME.elapsed * 6 + i) * 0.05;
+      const waveFade = clamp(zone.duration / (zone.initialDuration || 6), 0.12, 1);
+      if (zone.bodyMesh) {
+        zone.bodyMesh.material.opacity = clamp(0.2 + waveFade * 0.35, 0.15, 0.55);
+        zone.bodyMesh.rotation.x = Math.sin(GAME.elapsed * 6 + i) * 0.04;
+      }
+      if (zone.crestMesh) {
+        zone.crestMesh.position.y = 2.55 + Math.sin(GAME.elapsed * 4.5 + i * 1.7) * 0.35;
+        zone.crestMesh.material.opacity = clamp(0.3 + waveFade * 0.4, 0.18, 0.7);
+        zone.crestMesh.scale.y = 1 + Math.sin(GAME.elapsed * 3.2 + i) * 0.08;
+      }
+      if (zone.foamMesh) {
+        zone.foamMesh.material.opacity = clamp(0.08 + waveFade * 0.18, 0.04, 0.28);
+        zone.foamMesh.scale.x = 1 + Math.sin(GAME.elapsed * 5 + i * 2.3) * 0.06;
+      }
+      if (zone.spellVfx && Math.random() < 0.45) {
+        const sprayPos = zone.mesh.position.clone();
+        sprayPos.x += (Math.random() - 0.5) * 8;
+        sprayPos.y += 1.5 + Math.random() * 1.5;
+        sprayPos.z -= zone.radius + Math.random() * 1.5;
+        spawnZoneParticle(sprayPos, zone.spellVfx, 'spray');
+      }
       if (zone.z <= zone.minZ) {
         zone.duration = 0;
       }
@@ -1735,8 +2380,34 @@ function updateZones(dt) {
         enemy.mesh.position.z = Math.max(ENEMY_MIN_Z, enemy.mesh.position.z - zone.pushPerSecond * dt);
       }
     } else if (!zone.isLinkedWall) {
-      zone.mesh.rotation.y += dt * 0.8;
-      zone.mesh.material.opacity = clamp(0.25 + (zone.duration / 6) * 0.45, 0.2, 0.72);
+      const ringFade = clamp(zone.duration / (zone.initialDuration || 6), 0.12, 1);
+      const pulse = 1 + Math.sin(GAME.elapsed * 2.8 + i * 1.3) * 0.06;
+      if (zone.ringMesh) {
+        zone.ringMesh.rotation.y += dt * 0.8;
+        zone.ringMesh.material.opacity = clamp(0.3 + ringFade * 0.45, 0.2, 0.72);
+        zone.ringMesh.scale.set((zone.halfWidth || 1) * pulse, 1, (zone.halfLength || 1) * pulse);
+      }
+      if (zone.glowDisc) {
+        zone.glowDisc.material.opacity = clamp(0.06 + ringFade * 0.22, 0.04, 0.32);
+      }
+      if (zone.innerRing) {
+        zone.innerRing.rotation.y -= dt * 1.4;
+        zone.innerRing.material.opacity = clamp(0.12 + ringFade * 0.3, 0.08, 0.48);
+        const hw = (zone.halfWidth || 1) * 0.55;
+        const hl = (zone.halfLength || 1) * 0.55;
+        zone.innerRing.scale.set(hw * pulse, 0.8, hl * pulse);
+      }
+      if (!zone.ringMesh && zone.mesh.material) {
+        zone.mesh.rotation.y += dt * 0.8;
+        zone.mesh.material.opacity = clamp(0.25 + (zone.duration / 6) * 0.45, 0.2, 0.72);
+      }
+      if (zone.spellVfx && Math.random() < 0.25) {
+        const risePos = zone.mesh.position.clone();
+        risePos.x += (Math.random() - 0.5) * (zone.halfWidth || 3) * 1.4;
+        risePos.z += (Math.random() - 0.5) * (zone.radius || 2) * 1.4;
+        risePos.y = 0.1;
+        spawnZoneParticle(risePos, zone.spellVfx, 'rise');
+      }
     }
 
     while (zone.timer >= zone.tickRate) {
@@ -1836,6 +2507,10 @@ function animate() {
     updateZones(dt);
     updateEnemies(dt);
     updateProjectiles(dt);
+    updateTrailParticles(dt);
+    updateImpactFlashes(dt);
+    updateScreenShake(dt);
+    updateZoneParticles(dt);
     updateHud();
 
     if (GAME.baseHp <= 0) {

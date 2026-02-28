@@ -36,6 +36,10 @@
     <div id="historyPanel">
       <h3>Replay Script</h3>
       <pre id="historyScript">No applied prompts yet.</pre>
+      <h3 class="history-subtitle">Spell History</h3>
+      <ul id="spellHistoryList" aria-live="polite">
+        <li class="spell-history-empty">No spell casts yet.</li>
+      </ul>
     </div>
 
     <div id="promptBar">
@@ -51,6 +55,7 @@
       </select>
       <button id="estimateBtn" type="button">Estimate</button>
       <button id="applyBtn" type="button" disabled>Apply</button>
+      <button id="cancelSpellQueueBtn" type="button" disabled>Cancel Queue</button>
     </div>
 
     <div id="toast"></div>
