@@ -1,11 +1,23 @@
 import * as THREE from 'three';
 import { disposeEnemyVisual, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
+import { estimatePrompt } from './prompt/costEstimator.js';
+import { MODEL_PRESET_MAP, PromptProcessor } from './prompt/promptProcessor.js';
+import { PROMPT_TEMPLATE_VERSION } from './prompt/templateDrafts.js';
 
 const LANE_COUNT = 5;
 const LANE_SPACING = 8;
 const START_Z = -78;
 const BASE_Z = 33;
 const MAP_WIDTH = 52;
+const STARTING_GOLD = 1_000_000;
+const KILL_GOLD_REWARD = 10;
+const CASTLE_WALL_DEPTH = 4;
+const CASTLE_WALL_FRONT_Z = BASE_Z - 18;
+const CASTLE_WALL_Z = CASTLE_WALL_FRONT_Z + CASTLE_WALL_DEPTH * 0.5;
+const COMMANDER_MIN_Z = CASTLE_WALL_FRONT_Z + CASTLE_WALL_DEPTH + 0.35;
+const COMMANDER_MAX_Z = BASE_Z + 4;
+const GOON_ATTACK_INTERVAL_SECONDS = 3;
+const GOON_ATTACK_DAMAGE = 1;
 
 const GAME = {
   baseHp: 260,
@@ -13,6 +25,7 @@ const GAME = {
   mana: 120,
   manaRegen: 14,
   score: 0,
+  gold: STARTING_GOLD,
   wave: 1,
   elapsed: 0,
   kills: 0,
@@ -20,6 +33,11 @@ const GAME = {
   globalCooldown: 0,
   gameOver: false,
 };
+
+const BASELINE_HISTORY_TEXT =
+  `No applied prompts yet.\n` +
+  `Sandbox baseline: no generated ui/mechanics/units/actions.\n` +
+  `Template: ${PROMPT_TEMPLATE_VERSION}`;
 
 const SPELLS = {
   fireball: {
@@ -49,6 +67,7 @@ const SPELLS = {
 };
 
 const spellCooldowns = new Map();
+const goldReservations = new Map();
 const enemies = [];
 const projectiles = [];
 const walls = [];
@@ -60,9 +79,21 @@ const dom = {
   mana: document.getElementById('mana'),
   wave: document.getElementById('wave'),
   score: document.getElementById('score'),
+  gold: document.getElementById('gold'),
+  reservedGold: document.getElementById('reservedGold'),
   unlocks: document.getElementById('unlocks'),
+  loopStatus: document.getElementById('loopStatus'),
+  queueStatus: document.getElementById('queueStatus'),
+  applyStatus: document.getElementById('applyStatus'),
   commandWrap: document.getElementById('commandWrap'),
   commandInput: document.getElementById('commandInput'),
+  preview: document.getElementById('preview'),
+  previewBody: document.getElementById('previewBody'),
+  historyScript: document.getElementById('historyScript'),
+  promptInput: document.getElementById('promptInput'),
+  modelPreset: document.getElementById('modelPreset'),
+  estimateBtn: document.getElementById('estimateBtn'),
+  applyBtn: document.getElementById('applyBtn'),
   toast: document.getElementById('toast'),
 };
 
@@ -119,6 +150,32 @@ const rng = {
   },
 };
 
+const promptProcessor = new PromptProcessor(
+  {
+    reserveGold,
+    commitReservedGold,
+    refundReservedGold,
+  },
+  {
+    onQueueUpdated: (queueSize) => {
+      dom.queueStatus.textContent = `Queue: ${queueSize}`;
+      syncApplyButtonState();
+    },
+    onStatus: (message) => {
+      dom.applyStatus.textContent = message;
+    },
+    onHistoryUpdated: () => {
+      const script = promptProcessor.getReplayScript();
+      dom.historyScript.textContent = script.length > 0 ? script : BASELINE_HISTORY_TEXT;
+    },
+  },
+  {
+    generationMode: import.meta.env.VITE_GENERATION_MODE ?? 'openai-api-key',
+  }
+);
+
+let lastEstimate = null;
+let estimateInFlight = false;
 let spawnTimer = 0;
 let waveTimer = 0;
 let lastTime = performance.now();
@@ -143,10 +200,14 @@ dom.commandInput.addEventListener('keydown', (event) => {
   }
 });
 
+setupPromptUi();
 bootstrap();
 
 async function bootstrap() {
   refreshHud();
+  dom.loopStatus.textContent = 'Loop: Running';
+  dom.loopStatus.classList.remove('status-danger');
+  dom.loopStatus.classList.add('status-ok');
 
   try {
     await loadEnemyModels(scene);
@@ -191,6 +252,27 @@ function buildMap() {
   core.position.set(0, 4.7, BASE_Z + 0.8);
   core.castShadow = true;
   scene.add(core);
+
+  const castleWall = new THREE.Mesh(
+    new THREE.BoxGeometry(MAP_WIDTH - 4.5, 5.4, CASTLE_WALL_DEPTH),
+    new THREE.MeshStandardMaterial({ color: 0x6a635c, roughness: 0.9, metalness: 0.04 })
+  );
+  castleWall.position.set(0, 2.7, CASTLE_WALL_Z);
+  castleWall.castShadow = true;
+  castleWall.receiveShadow = true;
+  scene.add(castleWall);
+
+  const battlementMat = new THREE.MeshStandardMaterial({ color: 0x7c736a, roughness: 0.88 });
+  const battlementCount = 9;
+  for (let i = 0; i < battlementCount; i += 1) {
+    const t = battlementCount === 1 ? 0.5 : i / (battlementCount - 1);
+    const x = -((MAP_WIDTH - 9) / 2) + t * (MAP_WIDTH - 9);
+    const battlement = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.45, 1.2), battlementMat);
+    battlement.position.set(x, 6.05, CASTLE_WALL_Z - CASTLE_WALL_DEPTH * 0.35);
+    battlement.castShadow = true;
+    battlement.receiveShadow = true;
+    scene.add(battlement);
+  }
 
   const borderLeft = new THREE.Mesh(
     new THREE.BoxGeometry(2, 3.2, 150),
@@ -255,6 +337,8 @@ function createEnemy(kind, lane) {
     stunnedFor: 0,
     burningFor: 0,
     burnDps: 0,
+    atCastleWall: false,
+    wallAttackAccumulatorSeconds: 0,
     dead: false,
     deathTimer: 0,
     hitTimer: 0,
@@ -313,6 +397,10 @@ function onKeyDown(event) {
     return;
   }
 
+  if (isTypingTarget(event.target) && event.target !== dom.commandInput) {
+    return;
+  }
+
   if (event.key === 'Enter') {
     if (input.commandOpen) {
       return;
@@ -348,6 +436,140 @@ function closeCommand() {
   input.commandOpen = false;
   dom.commandWrap.classList.add('hidden');
   dom.commandInput.blur();
+}
+
+function setupPromptUi() {
+  dom.estimateBtn.addEventListener('click', async () => {
+    if (estimateInFlight) {
+      return;
+    }
+
+    const raw = dom.promptInput.value.trim();
+    if (!raw) {
+      return;
+    }
+
+    estimateInFlight = true;
+    dom.estimateBtn.disabled = true;
+    dom.applyStatus.textContent = 'Estimating with fast model...';
+
+    try {
+      lastEstimate = await estimatePrompt(raw);
+      renderEstimate(lastEstimate);
+      dom.applyStatus.textContent = `Estimated ${lastEstimate.id} with fast model`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      dom.applyStatus.textContent = `Estimate failed: ${message}`;
+      lastEstimate = null;
+      dom.preview.hidden = true;
+    } finally {
+      estimateInFlight = false;
+      dom.estimateBtn.disabled = false;
+      syncApplyButtonState();
+    }
+  });
+
+  dom.applyBtn.addEventListener('click', () => {
+    if (!lastEstimate) {
+      return;
+    }
+
+    if (!canSpendGold(lastEstimate.estimatedGoldCost)) {
+      dom.applyStatus.textContent = 'Apply blocked: not enough Gold at queue time';
+      syncApplyButtonState();
+      return;
+    }
+
+    const preset = dom.modelPreset.value;
+    promptProcessor.enqueue(lastEstimate, preset);
+    dom.applyStatus.textContent = `Queued ${lastEstimate.id} with preset ${preset}`;
+    dom.promptInput.value = '';
+    lastEstimate = null;
+    dom.preview.hidden = true;
+    syncApplyButtonState();
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      dom.estimateBtn.click();
+    }
+  });
+
+  dom.queueStatus.textContent = `Queue: ${promptProcessor.getQueueSize()}`;
+  dom.applyStatus.textContent = 'No prompt applied yet';
+  dom.historyScript.textContent = BASELINE_HISTORY_TEXT;
+}
+
+function renderEstimate(estimate) {
+  const canAfford = canSpendGold(estimate.estimatedGoldCost);
+  const selectedPreset = dom.modelPreset.value;
+
+  dom.previewBody.innerHTML = `
+    <div><strong>Types:</strong> ${estimate.classifiedTypes.join(', ')}</div>
+    <div><strong>Risk:</strong> ${estimate.riskLevel}</div>
+    <div><strong>Cost:</strong> ${estimate.estimatedGoldCost} Gold</div>
+    <div><strong>Estimator:</strong> gpt-5.3-codex (reasoning: low)</div>
+    <div><strong>Preset Model:</strong> ${MODEL_PRESET_MAP[selectedPreset]}</div>
+    <div><strong>Review Required:</strong> ${estimate.requiresReview ? 'yes' : 'no'}</div>
+    <div><strong>Can Afford:</strong> ${canAfford ? 'yes' : 'no'}</div>
+  `;
+
+  dom.preview.hidden = false;
+}
+
+function syncApplyButtonState() {
+  const canApply =
+    Boolean(lastEstimate) &&
+    !estimateInFlight &&
+    canSpendGold(lastEstimate.estimatedGoldCost) &&
+    !GAME.gameOver;
+  dom.applyBtn.disabled = !canApply;
+}
+
+function canSpendGold(amount) {
+  return GAME.gold >= amount;
+}
+
+function reserveGold(amount) {
+  if (!canSpendGold(amount)) {
+    return null;
+  }
+
+  GAME.gold -= amount;
+  const reservationId = `res_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  goldReservations.set(reservationId, amount);
+  refreshHud();
+  return reservationId;
+}
+
+function commitReservedGold(reservationId) {
+  if (!goldReservations.has(reservationId)) {
+    return false;
+  }
+
+  goldReservations.delete(reservationId);
+  refreshHud();
+  return true;
+}
+
+function refundReservedGold(reservationId) {
+  const amount = goldReservations.get(reservationId);
+  if (amount === undefined) {
+    return false;
+  }
+
+  goldReservations.delete(reservationId);
+  GAME.gold += amount;
+  refreshHud();
+  return true;
+}
+
+function getReservedGold() {
+  let total = 0;
+  for (const amount of goldReservations.values()) {
+    total += amount;
+  }
+  return total;
 }
 
 async function castFromPrompt(rawPrompt) {
@@ -930,7 +1152,7 @@ function updateCommander(dt) {
   }
 
   commander.mesh.position.x = clamp(commander.mesh.position.x, -18, 18);
-  commander.mesh.position.z = clamp(commander.mesh.position.z, BASE_Z - 17, BASE_Z + 4);
+  commander.mesh.position.z = clamp(commander.mesh.position.z, COMMANDER_MIN_Z, COMMANDER_MAX_Z);
 }
 
 function updateSpawning(dt) {
@@ -961,6 +1183,7 @@ function tryUnlockSpell() {
 }
 
 function updateEnemies(dt) {
+  const castleWallFrontZ = CASTLE_WALL_FRONT_Z;
   for (let i = enemies.length - 1; i >= 0; i -= 1) {
     const enemy = enemies[i];
 
@@ -997,7 +1220,7 @@ function updateEnemies(dt) {
     if (enemy.hitTimer > 0) {
       enemy.hitTimer = Math.max(0, enemy.hitTimer - dt);
       if (enemy.hitTimer === 0) {
-        setEnemyAnim(enemy.visual, 'run');
+        setEnemyAnim(enemy.visual, enemy.atCastleWall ? 'attack' : 'run');
       }
     }
 
@@ -1017,16 +1240,35 @@ function updateEnemies(dt) {
 
     if (!blocked) {
       enemy.mesh.position.z += enemy.speed * moveScale * dt;
+    } else {
+      enemy.atCastleWall = false;
+      enemy.wallAttackAccumulatorSeconds = 0;
+      if (enemy.hitTimer === 0) {
+        setEnemyAnim(enemy.visual, 'run');
+      }
     }
 
-    if (enemy.kind === 'ranged' && Math.random() < dt * 0.28 && enemy.mesh.position.z > BASE_Z - 15) {
-      GAME.baseHp -= 1;
+    if (!blocked && enemy.mesh.position.z >= castleWallFrontZ - 0.35) {
+      enemy.atCastleWall = true;
+      enemy.mesh.position.z = castleWallFrontZ - 0.35;
+    } else if (!blocked) {
+      enemy.atCastleWall = false;
+      enemy.wallAttackAccumulatorSeconds = 0;
+      if (enemy.hitTimer === 0) {
+        setEnemyAnim(enemy.visual, 'run');
+      }
     }
 
-    if (enemy.mesh.position.z >= BASE_Z + 2) {
-      GAME.baseHp -= enemy.damage;
-      destroyEnemy(i, false);
-      continue;
+    if (enemy.atCastleWall) {
+      if (enemy.hitTimer === 0) {
+        setEnemyAnim(enemy.visual, 'attack');
+      }
+
+      enemy.wallAttackAccumulatorSeconds += dt * moveScale;
+      while (enemy.wallAttackAccumulatorSeconds >= GOON_ATTACK_INTERVAL_SECONDS && GAME.baseHp > 0) {
+        enemy.wallAttackAccumulatorSeconds -= GOON_ATTACK_INTERVAL_SECONDS;
+        GAME.baseHp = Math.max(0, GAME.baseHp - GOON_ATTACK_DAMAGE);
+      }
     }
 
     if (enemy.hp <= 0) {
@@ -1053,6 +1295,7 @@ function destroyEnemy(index, slain) {
   if (slain) {
     GAME.score += enemy.worth;
     GAME.kills += 1;
+    GAME.gold += KILL_GOLD_REWARD;
   }
 }
 
@@ -1263,7 +1506,10 @@ function updateHud() {
   dom.mana.textContent = `${Math.floor(GAME.mana)} / ${GAME.maxMana}`;
   dom.wave.textContent = String(GAME.wave);
   dom.score.textContent = String(GAME.score);
+  dom.gold.textContent = Math.floor(GAME.gold).toLocaleString();
+  dom.reservedGold.textContent = Math.floor(getReservedGold()).toLocaleString();
   dom.unlocks.textContent = GAME.unlocks.join(', ');
+  syncApplyButtonState();
 }
 
 function refreshHud() {
@@ -1286,6 +1532,10 @@ function updateToast(dt) {
 
 function gameOver() {
   GAME.gameOver = true;
+  dom.loopStatus.textContent = 'Loop: Halted';
+  dom.loopStatus.classList.remove('status-ok');
+  dom.loopStatus.classList.add('status-danger');
+  dom.applyStatus.textContent = 'Prompt apply disabled (game over)';
   setToast(`Base destroyed. Final score ${GAME.score}. Press R to restart.`);
 }
 
@@ -1317,4 +1567,12 @@ function animate() {
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
+}
+
+function isTypingTarget(target) {
+  if (!target || typeof target.closest !== 'function') {
+    return false;
+  }
+
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 }

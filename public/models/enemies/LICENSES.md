@@ -1,25 +1,23 @@
 # Enemy Model Licensing
 
-This directory contains generated prototype enemy models used for local development.
-Current runtime enemy rendering uses sprite-based visuals from `src/enemy-models.js`; `.glb` files are optional for future upgrades.
+Current runtime enemy rendering uses:
+- `public/models/enemies/goblin-walk/Walking.fbx`
+- `public/models/enemies/goblin-walk/textures/*`
 
-## Included files
+## Source pipeline
 
-- `goblin.glb` (melee prototype)
-- `archer_goblin.glb` (ranged prototype)
-- `ogre.glb` (tank prototype)
+- Base goblin model: Sketchfab download provided by user
+- Animation: Mixamo (`Walking`)
+- Integration: Three.js FBX loader and animation mixer
 
-These three files were generated in-project via script and do not include external third-party assets.
+## Important license note
 
-## Planned replacement
+The referenced Sketchfab goblin link in chat is a CC-BY asset, which requires attribution.
+Before release, fill in the exact author name and source URL below.
 
-Replace prototypes with production CC0 low-poly assets when available.
-Keep these conventions:
+## Attribution template
 
-- glTF binary (`.glb`)
-- Clip names (case-insensitive aliases are supported): `idle`, `run`, `hit`, `die`
-- Origins at feet (`y=0`), forward facing `+Z`
-
-## Attribution guidance
-
-CC0 assets do not require attribution, but add source/license links in this file for traceability.
+- Model: Goblin
+- Author: `<REPLACE_WITH_SKETCHFAB_AUTHOR>`
+- Source: `<REPLACE_WITH_EXACT_MODEL_URL>`
+- License: `CC-BY 4.0`

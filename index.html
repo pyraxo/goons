@@ -12,12 +12,41 @@
       <div class="stat">Mana: <span id="mana"></span></div>
       <div class="stat">Wave: <span id="wave"></span></div>
       <div class="stat">Score: <span id="score"></span></div>
+      <div class="stat">Gold: <span id="gold"></span></div>
+      <div class="stat">Reserved: <span id="reservedGold"></span></div>
       <div class="stat">Unlocked: <span id="unlocks"></span></div>
       <div id="hint">WASD move commander. Enter opens command bar.</div>
     </div>
 
+    <div id="statusStrip">
+      <span id="loopStatus" class="status-ok">Loop: Running</span>
+      <span id="queueStatus">Queue: 0</span>
+      <span id="applyStatus">No prompt applied yet</span>
+    </div>
+
     <div id="commandWrap" class="hidden">
       <input id="commandInput" type="text" autocomplete="off" placeholder="Type a spell..." />
+    </div>
+
+    <div id="preview" hidden>
+      <h3>Prompt Preview</h3>
+      <div id="previewBody"></div>
+    </div>
+
+    <div id="historyPanel">
+      <h3>Replay Script</h3>
+      <pre id="historyScript">No applied prompts yet.</pre>
+    </div>
+
+    <div id="promptBar">
+      <textarea id="promptInput" placeholder="Type prompt: e.g. summon 3 shield bearers with taunt"></textarea>
+      <select id="modelPreset" aria-label="Model preset">
+        <option value="fast">Preset: Fast</option>
+        <option value="medium">Preset: Medium</option>
+        <option value="high">Preset: High</option>
+      </select>
+      <button id="estimateBtn" type="button">Estimate</button>
+      <button id="applyBtn" type="button" disabled>Apply</button>
     </div>
 
     <div id="toast"></div>
