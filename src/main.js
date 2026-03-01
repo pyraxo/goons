@@ -8,7 +8,7 @@ import {
   profileForEnemyKind,
   updatePoiseAndStagger,
 } from './combat/reaction-physics.js';
-import { disposeEnemyVisual, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
+import { disposeEnemyVisual, flashEnemyHit, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
 import { PromptProcessor } from './prompt/promptProcessor.js';
 import { PROMPT_TEMPLATE_VERSION } from './prompt/templateDrafts.js';
 import { playHurt, playDeath } from './sfx.js';
@@ -2970,7 +2970,7 @@ function updateEnemies(dt) {
 
     const movementInterrupted = enemy.staggerFor > 0 || enemy.stunnedFor > 0 || enemy.rootedFor > 0;
     const moveScale = movementInterrupted ? 0 : enemy.frozenFor > 0 ? 0.15 : enemy.slowFactor;
-    enemy.visual.playbackScale = moveScale;
+    enemy.visual.playbackScale = enemy.hitTimer > 0 ? 1 : moveScale;
 
     const laneBounds = enemyLaneBounds(enemy);
     const integrated = integrateVelocity(
@@ -3203,8 +3203,9 @@ function damageEnemy(enemy, amount) {
   }
 
   enemy.hp -= amount;
+  flashEnemyHit(enemy.visual);
   if (enemy.hp > 0) {
-    enemy.hitTimer = 0.12;
+    enemy.hitTimer = 0.35;
     setEnemyAnim(enemy.visual, 'hit');
     playHurt();
   }

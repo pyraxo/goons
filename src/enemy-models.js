@@ -46,6 +46,8 @@ const textureUrls = {
   aoMap: '/models/enemies/goblin-walk/textures/Goblin_Mixed_AO.png',
 };
 const meleeAttackClipPath = '/models/enemies/goblin-walk/StandingMeleeAttackDownward.fbx';
+const hitClipPath = '/models/enemies/goblin-walk/StandingReactLargeFromRight.fbx';
+const dieClipPath = '/models/enemies/goblin-walk/StandingDeathForward02.fbx';
 
 const stateAliases = {
   idle: ['idle'],
@@ -82,7 +84,11 @@ async function internalLoadEnemyModels() {
   const texturePack = await loadTexturePack();
   const loader = new FBXLoader();
   const byPath = new Map();
-  const meleeAttackClip = await loadOptionalAttackClip(loader, meleeAttackClipPath);
+  const [meleeAttackClip, hitClip, dieClip] = await Promise.all([
+    loadOptionalClip(loader, meleeAttackClipPath, 'attack'),
+    loadOptionalClip(loader, hitClipPath, 'hit'),
+    loadOptionalClip(loader, dieClipPath, 'die'),
+  ]);
 
   for (const [kind, entry] of byKind) {
     let shared = byPath.get(entry.path);
@@ -91,7 +97,11 @@ async function internalLoadEnemyModels() {
       byPath.set(entry.path, shared);
     }
 
-    const clips = kind === 'melee' ? withAttackClip(shared.clips, meleeAttackClip) : shared.clips;
+    let clips = mergeClip(shared.clips, hitClip);
+    clips = mergeClip(clips, dieClip);
+    if (kind === 'melee') {
+      clips = mergeClip(clips, meleeAttackClip);
+    }
 
     registry.set(kind, {
       kind,
@@ -146,7 +156,7 @@ async function loadPathTemplate(loader, path, texturePack) {
   }
 }
 
-async function loadOptionalAttackClip(loader, path) {
+async function loadOptionalClip(loader, path, clipName) {
   try {
     const root = await loader.loadAsync(path);
     const clips = root.animations || [];
@@ -156,26 +166,26 @@ async function loadOptionalAttackClip(loader, path) {
     }
 
     const clip = clips[0].clone();
-    clip.name = 'attack';
+    clip.name = clipName;
     return clip;
   } catch (error) {
-    console.warn(`[enemy-models] Optional attack clip missing at ${path}. Falling back to run.`, error);
+    console.warn(`[enemy-models] Optional clip missing at ${path}. Skipping.`, error);
     return null;
   }
 }
 
-function withAttackClip(baseClips, attackClip) {
-  if (!attackClip) {
+function mergeClip(baseClips, clip) {
+  if (!clip) {
     return baseClips;
   }
 
   const merged = [...baseClips];
-  const attackKey = normalize('attack');
-  const index = merged.findIndex((clip) => normalize(clip.name) === attackKey);
+  const key = normalize(clip.name);
+  const index = merged.findIndex((c) => normalize(c.name) === key);
   if (index >= 0) {
-    merged[index] = attackClip;
+    merged[index] = clip;
   } else {
-    merged.push(attackClip);
+    merged.push(clip);
   }
 
   return merged;
@@ -420,6 +430,49 @@ export function setEnemyAnim(enemyVisual, state) {
 
   next.play();
   enemyVisual.activeAction = next;
+}
+
+export function flashEnemyHit(enemyVisual) {
+  if (!enemyVisual.root) return;
+
+  const meshes = [];
+  enemyVisual.root.traverse((child) => {
+    if (child.isMesh) meshes.push(child);
+  });
+
+  for (const mesh of meshes) {
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of materials) {
+      if (!mat) continue;
+      mat._savedColor = mat.color?.clone();
+      mat.color?.set(0xff2222);
+      if (mat.emissive) {
+        mat._savedEmissive = mat.emissive.clone();
+        mat.emissive.set(0xff0000);
+        mat._savedEmissiveIntensity = mat.emissiveIntensity;
+        mat.emissiveIntensity = 0.6;
+      }
+    }
+  }
+
+  setTimeout(() => {
+    for (const mesh of meshes) {
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const mat of materials) {
+        if (!mat) continue;
+        if (mat._savedColor) {
+          mat.color.copy(mat._savedColor);
+          delete mat._savedColor;
+        }
+        if (mat._savedEmissive) {
+          mat.emissive.copy(mat._savedEmissive);
+          mat.emissiveIntensity = mat._savedEmissiveIntensity;
+          delete mat._savedEmissive;
+          delete mat._savedEmissiveIntensity;
+        }
+      }
+    }
+  }, 150);
 }
 
 export function disposeEnemyVisual(enemyVisual) {
