@@ -86,16 +86,25 @@
         </div>
       </div>
 
-      <!-- Top left: Wave -->
-      <div class="hud-block hud-block--wave">
-        <span class="hud-block-label">WAVE</span>
-        <span class="hud-block-value" id="wave">1</span>
+      <!-- Top left: Wave + Score -->
+      <div class="hud-top-left">
+        <div class="hud-block hud-block--wave">
+          <span class="hud-block-label">WAVE</span>
+          <span class="hud-block-value" id="wave">1</span>
+        </div>
+        <div class="hud-block hud-block--score">
+          <span class="hud-block-label">SCORE</span>
+          <span class="hud-block-value" id="score">0</span>
+        </div>
       </div>
 
-      <!-- Top right: Score -->
-      <div class="hud-block hud-block--score">
-        <span class="hud-block-label">SCORE</span>
-        <span class="hud-block-value" id="score">0</span>
+      <!-- Top right: Stats -->
+      <div class="hud-stats" id="statsPanel">
+        <span class="hud-stats-label">STATS</span>
+        <span class="hud-stats-row"><span class="hud-stats-key">FPS</span> <span id="statsFps">--</span></span>
+        <span class="hud-stats-row"><span class="hud-stats-key">ENEMIES</span> <span id="statsEnemies">0</span></span>
+        <span class="hud-stats-row"><span class="hud-stats-key">DRAWS</span> <span id="statsDraws">0</span></span>
+        <span class="hud-stats-row"><span class="hud-stats-key">TRIS</span> <span id="statsTris">0</span></span>
       </div>
 
       <!-- Bottom-left above grimoire: Spells -->

@@ -489,6 +489,10 @@ export function disposeEnemyVisual(enemyVisual) {
         return;
       }
 
+      if (child.geometry) {
+        child.geometry.dispose();
+      }
+
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       for (const material of materials) {
         if (material?.userData?.enemyInstanceMaterial) {
@@ -505,9 +509,11 @@ export function disposeEnemyVisual(enemyVisual) {
 
 function buildFallbackVisual(kind, position) {
   const look = FALLBACK_LOOK[kind] || FALLBACK_LOOK.melee;
+  const mat = new THREE.MeshStandardMaterial({ color: look.color, roughness: 0.86 });
+  mat.userData.enemyInstanceMaterial = true;
   const mesh = new THREE.Mesh(
     new THREE.BoxGeometry(look.size, look.size, look.size),
-    new THREE.MeshStandardMaterial({ color: look.color, roughness: 0.86 })
+    mat
   );
   mesh.position.y = look.size / 2;
   mesh.castShadow = true;

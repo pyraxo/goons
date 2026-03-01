@@ -94,10 +94,22 @@ const dom = {
   cancelSpellQueueBtn: document.getElementById('cancelSpellQueueBtn'),
   resetSandboxBtn: document.getElementById('resetSandboxBtn'),
   toast: document.getElementById('toast'),
+  statsFps: document.getElementById('statsFps'),
+  statsEnemies: document.getElementById('statsEnemies'),
+  statsDraws: document.getElementById('statsDraws'),
+  statsTris: document.getElementById('statsTris'),
 };
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x1a0800, 60, 170);
+
+const POOL_GEO = {
+  sphereSmall: new THREE.SphereGeometry(1, 4, 4),
+  sphereMed: new THREE.SphereGeometry(1, 5, 5),
+  cylinder: new THREE.CylinderGeometry(0.3, 0.3, 4, 4),
+  octahedron: new THREE.OctahedronGeometry(1, 0),
+  ring: new THREE.RingGeometry(0.4, 1, 6),
+};
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -176,6 +188,8 @@ let spawnTimer = 0;
 let waveTimer = 0;
 let lastTime = performance.now();
 let toastTimer = 0;
+const frameTimes = [];
+let statsAccum = 0;
 let resetInFlight = false;
 const spellHistory = [];
 
@@ -200,6 +214,9 @@ function initOnboarding() {
     return;
   }
 
+  // Preload models while user reads the onboarding screen
+  const preload = loadEnemyModels(scene);
+
   // bg soundtrack - god of goons (needs user gesture to play)
   const bgm = new Audio('/god-of-goons.mp3');
   bgm.loop = true;
@@ -212,7 +229,7 @@ function initOnboarding() {
     bgm.play().catch(() => {});
     overlay.classList.add('ob-exiting');
     setTimeout(() => overlay.remove(), 800);
-    bootstrap();
+    bootstrap(preload);
   }
 
   startBtn.addEventListener('click', dismiss);
@@ -224,14 +241,14 @@ function initOnboarding() {
   });
 }
 
-async function bootstrap() {
+async function bootstrap(preload) {
   refreshHud();
   dom.loopStatus.textContent = 'Loop: Running';
   dom.loopStatus.classList.remove('status-danger');
   dom.loopStatus.classList.add('status-ok');
 
   try {
-    await loadEnemyModels(scene);
+    await (preload || loadEnemyModels(scene));
   } catch (error) {
     console.warn('[main] Enemy model preload failed. Fallback meshes will be used.', error);
   }
@@ -498,11 +515,6 @@ function buildMap() {
     river.rotation.x = -Math.PI / 2;
     river.position.set(side * (MAP_WIDTH / 2 - 1), 0.02, -8);
     scene.add(river);
-    for (let z = -70; z < 30; z += 20) {
-      const g = new THREE.PointLight(0xff4400, 1.2, 12);
-      g.position.set(side * (MAP_WIDTH / 2 - 1), 0.8, z);
-      scene.add(g);
-    }
   }
 
   // ── Lava cracks across the battlefield ──
@@ -540,24 +552,19 @@ function buildMap() {
     pool.rotation.x = -Math.PI / 2;
     pool.position.set(p.x, 0.05, p.z);
     scene.add(pool);
-    const glow = new THREE.PointLight(0xff4400, 2.5, 22);
-    glow.position.set(p.x, 2, p.z);
-    scene.add(glow);
-    animatedEnv.lavaPools.push({ light: glow, mat: poolMat, baseIntensity: 2.5, phase: Math.random() * 6.28 });
+    animatedEnv.lavaPools.push({ mat: poolMat, phase: Math.random() * 6.28 });
 
-    // Smoke column rising from each pool
-    for (let s = 0; s < 3; s++) {
-      const smoke = new THREE.Mesh(
-        new THREE.SphereGeometry(0.6 + Math.random() * 0.8, 6, 5),
-        new THREE.MeshStandardMaterial({ color: 0x222222, transparent: true, opacity: 0.2, depthWrite: false })
-      );
-      smoke.position.set(p.x + (Math.random() - 0.5) * 2, 1 + s * 2, p.z + (Math.random() - 0.5) * 2);
-      scene.add(smoke);
-      animatedEnv.smokeColumns.push({
-        mesh: smoke, baseX: smoke.position.x, baseZ: smoke.position.z,
-        baseY: smoke.position.y, speed: 0.8 + Math.random() * 0.6, phase: Math.random() * 6.28,
-      });
-    }
+    // Single smoke column rising from each pool
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.6 + Math.random() * 0.8, 6, 5),
+      new THREE.MeshStandardMaterial({ color: 0x222222, transparent: true, opacity: 0.2, depthWrite: false })
+    );
+    smoke.position.set(p.x + (Math.random() - 0.5) * 2, 1, p.z + (Math.random() - 0.5) * 2);
+    scene.add(smoke);
+    animatedEnv.smokeColumns.push({
+      mesh: smoke, baseX: smoke.position.x, baseZ: smoke.position.z,
+      baseY: smoke.position.y, speed: 0.8 + Math.random() * 0.6, phase: Math.random() * 6.28,
+    });
   }
 
   // ── Fortress base (dark obsidian keep) ──
@@ -584,10 +591,6 @@ function buildMap() {
     spike.position.set(tx, 16, BASE_Z + 6);
     spike.castShadow = true;
     scene.add(spike);
-    const brazier = new THREE.PointLight(0xff5500, 2, 16);
-    brazier.position.set(tx, 14.5, BASE_Z + 6);
-    scene.add(brazier);
-    animatedEnv.torchLights.push({ light: brazier, baseIntensity: 2, phase: Math.random() * 6.28 });
   }
 
   // ── The Eye — fiery core ──
@@ -647,14 +650,10 @@ function buildMap() {
     }
   }
 
-  // ── Wall-top torches (flickering) ──
+  // ── Wall-top torches ──
   const torchSpacing = (MAP_WIDTH - 10) / 7;
   for (let i = 0; i < 8; i++) {
     const tx = -(MAP_WIDTH - 10) / 2 + i * torchSpacing;
-    const torchLight = new THREE.PointLight(0xff6622, 2.2, 16);
-    torchLight.position.set(tx, 7.5, CASTLE_WALL_Z - 1.5);
-    scene.add(torchLight);
-    animatedEnv.torchLights.push({ light: torchLight, baseIntensity: 2.2, phase: Math.random() * 6.28 });
     // Torch post
     const tpost = new THREE.Mesh(
       new THREE.CylinderGeometry(0.08, 0.1, 1.6, 4),
@@ -741,10 +740,6 @@ function buildMap() {
     mtn.position.set(m.x, m.h / 2 - 2, m.z);
     scene.add(mtn);
     if (m.volcano) {
-      const caldera = new THREE.PointLight(0xff2200, 5, 60);
-      caldera.position.set(m.x, m.h - 2, m.z);
-      scene.add(caldera);
-      animatedEnv.torchLights.push({ light: caldera, baseIntensity: 5, phase: 1.5 });
       const lavaCap = new THREE.Mesh(
         new THREE.CircleGeometry(6, 12),
         new THREE.MeshStandardMaterial({ color: 0xff5500, emissive: 0xff3300, emissiveIntensity: 3.5, transparent: true, opacity: 0.85 })
@@ -844,7 +839,7 @@ function buildMap() {
   const ashMat = new THREE.MeshStandardMaterial({
     color: 0x555555, emissive: 0x222222, emissiveIntensity: 0.3, transparent: true, opacity: 0.45, depthWrite: false,
   });
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 80; i++) {
     const isEmber = Math.random() > 0.35;
     const mat = isEmber ? emberMat : ashMat;
     const size = isEmber ? 0.06 + Math.random() * 0.12 : 0.12 + Math.random() * 0.2;
@@ -878,7 +873,6 @@ function updateEnvironment(elapsed, dt) {
   // Pulsing lava pools
   for (const p of animatedEnv.lavaPools) {
     const pulse = Math.sin(elapsed * 1.5 + p.phase) * 0.3 + Math.sin(elapsed * 3.2 + p.phase) * 0.15;
-    p.light.intensity = p.baseIntensity * (1 + pulse);
     p.mat.emissiveIntensity = 2.0 + pulse * 0.8;
   }
   // Flowing lava rivers
@@ -1628,7 +1622,6 @@ function castArcaneMissiles() {
     );
     const offset = (i - 1) * 1.2;
     projectileMesh.position.copy(commander.mesh.position).add(new THREE.Vector3(offset, 1.8 + i * 0.4, -0.5));
-    projectileMesh.castShadow = true;
     scene.add(projectileMesh);
     const glowLight = new THREE.PointLight(0xc59dff, power * 1.5, 4);
     projectileMesh.add(glowLight);
@@ -1685,7 +1678,6 @@ function castMeteor() {
     })
   );
   meteorMesh.position.set(impactPos.x + (Math.random() - 0.5) * 3, 38, impactPos.z - 25);
-  meteorMesh.castShadow = true;
   scene.add(meteorMesh);
   const meteorGlow = new THREE.PointLight(0xff6622, 4, 12);
   meteorMesh.add(meteorGlow);
@@ -1763,25 +1755,25 @@ function spawnTrailParticle(position, spell) {
 
   if (trail === 'ember_trail' || trail === 'spark') {
     size = 0.12 + Math.random() * 0.18;
-    geo = new THREE.SphereGeometry(size, 4, 4);
+    geo = POOL_GEO.sphereSmall;
   } else if (trail === 'frost_mist' || trail === 'smoke') {
     size = 0.25 + Math.random() * 0.35;
-    geo = new THREE.SphereGeometry(size, 5, 5);
+    geo = POOL_GEO.sphereMed;
   } else if (trail === 'lightning_arc') {
     size = 0.08 + Math.random() * 0.12;
-    geo = new THREE.CylinderGeometry(size * 0.3, size * 0.3, size * 4, 4);
+    geo = POOL_GEO.cylinder;
   } else if (trail === 'holy_motes' || trail === 'shadow_wisp') {
     size = 0.1 + Math.random() * 0.15;
-    geo = new THREE.OctahedronGeometry(size, 0);
+    geo = POOL_GEO.octahedron;
   } else if (trail === 'drip') {
     size = 0.08 + Math.random() * 0.12;
-    geo = new THREE.SphereGeometry(size, 4, 4);
+    geo = POOL_GEO.sphereSmall;
   } else if (trail === 'rune_glyphs') {
     size = 0.12 + Math.random() * 0.14;
-    geo = new THREE.RingGeometry(size * 0.4, size, 6);
+    geo = POOL_GEO.ring;
   } else if (trail === 'ember_swirl') {
     size = 0.1 + Math.random() * 0.16;
-    geo = new THREE.SphereGeometry(size, 4, 4);
+    geo = POOL_GEO.sphereSmall;
   } else {
     return;
   }
@@ -1795,6 +1787,7 @@ function spawnTrailParticle(position, spell) {
   });
 
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.scale.setScalar(size);
   mesh.position.copy(position);
   mesh.position.x += (Math.random() - 0.5) * 0.6;
   mesh.position.y += (Math.random() - 0.5) * 0.4;
@@ -2090,7 +2083,6 @@ function updateTrailParticles(dt) {
     p.mesh.material.opacity = Math.max(0, p.mesh.material.opacity - p.fadeRate * dt);
     if (p.life <= 0 || p.mesh.material.opacity <= 0) {
       scene.remove(p.mesh);
-      p.mesh.geometry.dispose();
       p.mesh.material.dispose();
       trailParticles.splice(i, 1);
     }
@@ -2157,16 +2149,16 @@ function spawnZoneParticle(position, vfx, mode) {
   let size, geo;
   if (mode === 'spray') {
     size = 0.1 + Math.random() * 0.15;
-    geo = new THREE.SphereGeometry(size, 4, 4);
+    geo = POOL_GEO.sphereSmall;
   } else if (mode === 'orbit') {
     size = 0.08 + Math.random() * 0.1;
-    geo = new THREE.SphereGeometry(size, 5, 5);
+    geo = POOL_GEO.sphereMed;
   } else if (mode === 'pulse') {
     size = 0.12 + Math.random() * 0.15;
-    geo = new THREE.RingGeometry(size * 0.5, size, 8);
+    geo = POOL_GEO.ring;
   } else {
     size = 0.08 + Math.random() * 0.12;
-    geo = new THREE.OctahedronGeometry(size, 0);
+    geo = POOL_GEO.octahedron;
   }
   const mat = new THREE.MeshStandardMaterial({
     color,
@@ -2177,6 +2169,7 @@ function spawnZoneParticle(position, vfx, mode) {
     side: mode === 'pulse' ? THREE.DoubleSide : THREE.FrontSide,
   });
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.scale.setScalar(size);
   mesh.position.copy(position);
   if (mode === 'pulse') {
     mesh.rotation.x = -Math.PI / 2;
@@ -2244,7 +2237,6 @@ function updateZoneParticles(dt) {
     p.mesh.material.opacity = Math.max(0, p.life * p.fadeRate);
     if (p.life <= 0) {
       scene.remove(p.mesh);
-      p.mesh.geometry.dispose();
       p.mesh.material.dispose();
       zoneParticles.splice(i, 1);
     }
@@ -2293,7 +2285,6 @@ function castProjectileFromConfig(spell, archetype = 'projectile') {
   if (shape === 'arc') {
     projectileMesh.rotation.x = Math.PI * 0.5;
   }
-  projectileMesh.castShadow = true;
   scene.add(projectileMesh);
 
   const glowLight = new THREE.PointLight(mainColor, power * 2.5, 6);
@@ -2362,7 +2353,6 @@ function castZoneFromConfig(spell) {
       })
     );
     wall.position.set(laneX(lane), 1.8, z);
-    wall.castShadow = true;
     wall.receiveShadow = true;
     const wallGlow = new THREE.PointLight(wallAccent, 1.2, 8);
     wallGlow.position.set(0, 0.5, 0);
@@ -2417,7 +2407,6 @@ function castZoneFromConfig(spell) {
       })
     );
     bodyMesh.position.y = 1.1;
-    bodyMesh.castShadow = true;
     waveGroup.add(bodyMesh);
 
     const crestMesh = new THREE.Mesh(
@@ -2676,7 +2665,6 @@ function castStrikeFromConfig(spell) {
     38,
     impactPos.z - 25
   );
-  strikeMesh.castShadow = true;
   scene.add(strikeMesh);
 
   const strikeGlow = new THREE.PointLight(mainColor, 4, 12);
@@ -3094,6 +3082,7 @@ function updateProjectiles(dt) {
       projectile.life -= dt;
       projectile.mesh.scale.y = Math.max(0.2, projectile.life * 5);
       if (projectile.life <= 0) {
+        disposeGroupMeshes(projectile.mesh);
         scene.remove(projectile.mesh);
         projectiles.splice(i, 1);
       }
@@ -3115,6 +3104,7 @@ function updateProjectiles(dt) {
           projectile.meteorShadow.geometry.dispose();
           projectile.meteorShadow.material.dispose();
         }
+        disposeGroupMeshes(projectile.mesh);
         scene.remove(projectile.mesh);
         projectiles.splice(i, 1);
       } else {
@@ -3132,6 +3122,7 @@ function updateProjectiles(dt) {
         projectile.meteorShadow.geometry.dispose();
         projectile.meteorShadow.material.dispose();
       }
+      disposeGroupMeshes(projectile.mesh);
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
       continue;
@@ -3151,6 +3142,7 @@ function updateProjectiles(dt) {
         projectile.meteorShadow.geometry.dispose();
         projectile.meteorShadow.material.dispose();
       }
+      disposeGroupMeshes(projectile.mesh);
       scene.remove(projectile.mesh);
       projectiles.splice(i, 1);
       continue;
@@ -3279,6 +3271,7 @@ function updateWalls(dt) {
     const wall = walls[i];
     wall.duration -= dt;
     if (wall.duration <= 0 || wall.hp <= 0) {
+      disposeGroupMeshes(wall.mesh);
       scene.remove(wall.mesh);
       walls.splice(i, 1);
       continue;
@@ -3392,6 +3385,7 @@ function updateZones(dt) {
 
     if (zone.duration <= 0) {
       if (!zone.isLinkedWall) {
+        disposeGroupMeshes(zone.mesh);
         scene.remove(zone.mesh);
       }
       zones.splice(i, 1);
@@ -3408,6 +3402,25 @@ function updateHud() {
   dom.score.textContent = String(GAME.score);
   dom.unlocks.textContent = GAME.unlocks.join(', ');
   if (dom.baseHpBar) dom.baseHpBar.style.width = `${Math.max(0, (GAME.baseHp / 200) * 100)}%`;
+}
+
+function updateStats(dt) {
+  frameTimes.push(dt);
+  if (frameTimes.length > 30) frameTimes.shift();
+  statsAccum += dt;
+  if (statsAccum < 0.5) return;
+  statsAccum = 0;
+  const avgDt = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+  const fps = avgDt > 0 ? Math.round(1 / avgDt) : 0;
+  dom.statsFps.textContent = String(fps);
+  let aliveCount = 0;
+  for (const e of enemies) { if (!e.dead) aliveCount++; }
+  dom.statsEnemies.textContent = String(aliveCount);
+  const info = renderer.info.render;
+  dom.statsDraws.textContent = String(info.calls);
+  dom.statsTris.textContent = info.triangles > 1000
+    ? (info.triangles / 1000).toFixed(1) + 'k'
+    : String(info.triangles);
 }
 
 function refreshHud() {
@@ -3495,7 +3508,6 @@ function spawnFortressExplosion() {
       Math.random() * 4,
       (Math.random() - 0.5) * 6
     ));
-    chunk.castShadow = true;
     scene.add(chunk);
 
     const angle = Math.random() * Math.PI * 2;
@@ -3869,11 +3881,31 @@ function animate() {
 
   updateToast(dt);
   renderer.render(scene, camera);
+  updateStats(dt);
   requestAnimationFrame(animate);
 }
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
+}
+
+const poolGeoSet = new Set(Object.values(POOL_GEO));
+
+function disposeGroupMeshes(obj) {
+  if (obj.isMesh) {
+    if (obj.geometry && !poolGeoSet.has(obj.geometry)) {
+      obj.geometry.dispose();
+    }
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const m of mats) {
+      if (m) m.dispose();
+    }
+  }
+  if (obj.children) {
+    for (const child of obj.children) {
+      disposeGroupMeshes(child);
+    }
+  }
 }
 
 function isTypingTarget(target) {

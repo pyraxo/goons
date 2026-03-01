@@ -548,10 +548,18 @@ canvas { display: block; }
   flex-shrink: 0;
 }
 
-/* ─── Top-left: Wave block ─── */
+/* ─── Top-left: Wave + Score group ─── */
+
+.hud-top-left {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  display: flex;
+  gap: 10px;
+}
 
 .hud-block {
-  position: absolute;
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -564,8 +572,6 @@ canvas { display: block; }
 }
 
 .hud-block--wave {
-  top: 18px;
-  left: 18px;
   background:
     linear-gradient(180deg, rgba(10, 4, 2, 0.9) 0%, rgba(6, 2, 1, 0.94) 100%) padding-box,
     conic-gradient(
@@ -580,8 +586,6 @@ canvas { display: block; }
 }
 
 .hud-block--score {
-  top: 18px;
-  right: 18px;
   background:
     linear-gradient(180deg, rgba(10, 4, 2, 0.9) 0%, rgba(6, 2, 1, 0.94) 100%) padding-box,
     conic-gradient(
@@ -591,6 +595,51 @@ canvas { display: block; }
       transparent 60%, transparent 100%
     ) border-box;
   animation: border-rotate 9s linear infinite;
+}
+
+/* ─── Top-right: Stats panel ─── */
+
+.hud-stats {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  background: linear-gradient(180deg, rgba(10, 4, 2, 0.9) 0%, rgba(6, 2, 1, 0.94) 100%);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 140, 60, 0.04);
+  font-family: var(--font-mono);
+  min-width: 120px;
+}
+
+.hud-stats-label {
+  font-family: var(--font-heading);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.hud-stats-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.hud-stats-key {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
 }
 
 .hud-block-label {
@@ -942,6 +991,8 @@ canvas { display: block; }
   .hud-top { width: min(360px, 80vw); }
   .hud-block-value { font-size: 22px; }
   .hud-block { padding: 8px 14px; }
+  .hud-top-left { gap: 8px; }
+  .hud-stats { min-width: 100px; font-size: 10px; }
 
   #statusStrip {
     top: auto; right: auto; left: 14px; bottom: 228px;
@@ -966,6 +1017,9 @@ canvas { display: block; }
   .hud-hp-value { font-size: 12px; }
   .hud-block-value { font-size: 18px; }
   .hud-block { padding: 6px 12px; }
+  .hud-top-left { left: 10px; top: 10px; gap: 6px; }
+  .hud-stats { right: 10px; top: 10px; padding: 8px 10px; min-width: 90px; }
+  .hud-stats-row { font-size: 10px; }
 }
 
 /* ═══════════════════════════════════════════
