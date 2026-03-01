@@ -1,6 +1,11 @@
 // Synthesised sound effects using Web Audio API — no files needed.
 
 let ctx = null;
+let sfxMuted = false;
+
+export function setSfxMuted(val) {
+  sfxMuted = val;
+}
 
 function getCtx() {
   if (!ctx) {
@@ -19,6 +24,7 @@ const DEATH_COOLDOWN = 0.05;
  * Short percussive "hurt" thud — pitched-down noise burst + low sine thump.
  */
 export function playHurt() {
+  if (sfxMuted) return;
   const ac = getCtx();
   const now = ac.currentTime;
   if (now - lastHurtAt < HURT_COOLDOWN) return;
@@ -66,6 +72,7 @@ export function playHurt() {
  * Longer "death" sound — descending tone + crunch noise + sub rumble.
  */
 export function playDeath() {
+  if (sfxMuted) return;
   const ac = getCtx();
   const now = ac.currentTime;
   if (now - lastDeathAt < DEATH_COOLDOWN) return;

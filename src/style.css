@@ -597,6 +597,41 @@ canvas { display: block; }
   animation: border-rotate 9s linear infinite;
 }
 
+/* ─── Top-right: Controls ─── */
+
+.hud-controls {
+  position: absolute;
+  top: 18px;
+  right: 168px;
+  display: flex;
+  gap: 6px;
+  z-index: 100;
+}
+
+.hud-ctrl-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(10, 4, 2, 0.9) 0%, rgba(6, 2, 1, 0.94) 100%);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 140, 60, 0.04);
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.hud-ctrl-btn:hover {
+  border-color: var(--ember);
+  box-shadow: 0 0 10px rgba(255, 100, 20, 0.3);
+}
+
 /* ─── Top-right: Stats panel ─── */
 
 .hud-stats {
@@ -993,6 +1028,7 @@ canvas { display: block; }
   .hud-block { padding: 8px 14px; }
   .hud-top-left { gap: 8px; }
   .hud-stats { min-width: 100px; font-size: 10px; }
+  .hud-controls { right: 148px; }
 
   #statusStrip {
     top: auto; right: auto; left: 14px; bottom: 228px;
@@ -1020,6 +1056,8 @@ canvas { display: block; }
   .hud-top-left { left: 10px; top: 10px; gap: 6px; }
   .hud-stats { right: 10px; top: 10px; padding: 8px 10px; min-width: 90px; }
   .hud-stats-row { font-size: 10px; }
+  .hud-controls { right: 120px; top: 10px; }
+  .hud-ctrl-btn { width: 30px; height: 30px; font-size: 14px; }
 }
 
 /* ═══════════════════════════════════════════

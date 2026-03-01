@@ -11,7 +11,7 @@ import {
 import { disposeEnemyVisual, flashEnemyHit, loadEnemyModels, setEnemyAnim, spawnEnemyVisual } from './enemy-models.js';
 import { PromptProcessor } from './prompt/promptProcessor.js';
 import { PROMPT_TEMPLATE_VERSION } from './prompt/templateDrafts.js';
-import { playHurt, playDeath } from './sfx.js';
+import { playHurt, playDeath, setSfxMuted } from './sfx.js';
 
 const LANE_COUNT = 5;
 const LANE_SPACING = 8;
@@ -40,6 +40,9 @@ const GAME = {
   gameOver: false,
 };
 
+let bgm = null;
+let paused = false;
+let muted = false;
 
 const SPELLS = {
   fireball: {
@@ -98,6 +101,8 @@ const dom = {
   statsEnemies: document.getElementById('statsEnemies'),
   statsDraws: document.getElementById('statsDraws'),
   statsTris: document.getElementById('statsTris'),
+  pauseBtn: document.getElementById('pauseBtn'),
+  muteBtn: document.getElementById('muteBtn'),
 };
 
 const scene = new THREE.Scene();
@@ -202,6 +207,8 @@ function sleep(ms) {
 window.addEventListener('resize', onResize);
 window.addEventListener('keydown', onKeyDown);
 window.addEventListener('keyup', onKeyUp);
+dom.pauseBtn.addEventListener('click', togglePause);
+dom.muteBtn.addEventListener('click', toggleMute);
 
 setupPromptUi();
 initOnboarding();
@@ -218,7 +225,7 @@ function initOnboarding() {
   const preload = loadEnemyModels(scene);
 
   // bg soundtrack - god of goons (needs user gesture to play)
-  const bgm = new Audio('/god-of-goons.mp3');
+  bgm = new Audio('/god-of-goons.mp3');
   bgm.loop = true;
   bgm.volume = 0.2;
 
@@ -1083,15 +1090,30 @@ function onResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+function togglePause() {
+  paused = !paused;
+  dom.pauseBtn.textContent = paused ? '▶' : '⏸';
+}
+
+function toggleMute() {
+  muted = !muted;
+  setSfxMuted(muted);
+  if (bgm) bgm.muted = muted;
+  dom.muteBtn.textContent = muted ? '🔇' : '🔊';
+}
+
 function onKeyDown(event) {
+  if (isTypingTarget(event.target)) {
+    return;
+  }
+
+  if (event.key === 'Escape') { togglePause(); return; }
+  if (event.key === 'm' || event.key === 'M') { toggleMute(); return; }
+
   if (GAME.gameOver) {
     if (event.key === 'r' || event.key === 'R') {
       window.location.reload();
     }
-    return;
-  }
-
-  if (isTypingTarget(event.target)) {
     return;
   }
 
@@ -3856,27 +3878,29 @@ function animate() {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (!GAME.gameOver) {
-    GAME.elapsed += dt;
-    updateCommander(dt);
-    updateSpawning(dt);
-    updateResources(dt);
-    updateWalls(dt);
-    updateZones(dt);
-    updateEnemies(dt);
-    updateProjectiles(dt);
-    updateTrailParticles(dt);
-    updateImpactFlashes(dt);
-    updateScreenShake(dt);
-    updateZoneParticles(dt);
-    updateEnvironment(GAME.elapsed, dt);
-    updateHud();
+  if (!paused) {
+    if (!GAME.gameOver) {
+      GAME.elapsed += dt;
+      updateCommander(dt);
+      updateSpawning(dt);
+      updateResources(dt);
+      updateWalls(dt);
+      updateZones(dt);
+      updateEnemies(dt);
+      updateProjectiles(dt);
+      updateTrailParticles(dt);
+      updateImpactFlashes(dt);
+      updateScreenShake(dt);
+      updateZoneParticles(dt);
+      updateEnvironment(GAME.elapsed, dt);
+      updateHud();
 
-    if (GAME.baseHp <= 0) {
-      gameOver();
+      if (GAME.baseHp <= 0) {
+        gameOver();
+      }
+    } else {
+      updateDeathSequence(dt);
     }
-  } else {
-    updateDeathSequence(dt);
   }
 
   updateToast(dt);
