@@ -42,7 +42,7 @@ const GAME = {
 
 let bgm = null;
 let paused = false;
-let muted = false;
+let muted = localStorage.getItem('goons-muted') === 'true';
 
 const SPELLS = {
   fireball: {
@@ -228,6 +228,9 @@ function initOnboarding() {
   bgm = new Audio('/god-of-goons.mp3');
   bgm.loop = true;
   bgm.volume = 0.2;
+  bgm.muted = muted;
+  setSfxMuted(muted);
+  dom.muteBtn.textContent = muted ? '🔇' : '🔊';
 
   let dismissed = false;
   function dismiss() {
@@ -487,7 +490,7 @@ function buildMap() {
   const groundTex = makeGroundTexture(512);
   const groundNorm = makeGroundNormal(256);
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(MAP_WIDTH, 150, 48, 96),
+    new THREE.PlaneGeometry(MAP_WIDTH, 250, 48, 160),
     new THREE.MeshStandardMaterial({
       map: groundTex, normalMap: groundNorm, normalScale: new THREE.Vector2(0.6, 0.6),
       roughness: 0.92, metalness: 0.06,
@@ -509,46 +512,12 @@ function buildMap() {
   ground.geometry.computeVertexNormals();
   scene.add(ground);
 
-  // ── Lava rivers (wide flowing channels along borders) ──
-  const lavaRiverTex = makeLavaTexture(256);
-  lavaRiverTex.repeat.set(1, 8);
-  const lavaRiverMat = new THREE.MeshStandardMaterial({
-    map: lavaRiverTex, emissive: 0xff4400, emissiveIntensity: 1.5,
-    roughness: 0.2, metalness: 0.1,
-  });
-  animatedEnv.lavaRiverMats.push(lavaRiverMat);
-  for (const side of [-1, 1]) {
-    const river = new THREE.Mesh(new THREE.PlaneGeometry(5, 140), lavaRiverMat);
-    river.rotation.x = -Math.PI / 2;
-    river.position.set(side * (MAP_WIDTH / 2 - 1), 0.02, -8);
-    scene.add(river);
-  }
-
-  // ── Lava cracks across the battlefield ──
-  const lavaCrackMat = new THREE.MeshStandardMaterial({
-    color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 2.0,
-    roughness: 0.3, transparent: true, opacity: 0.7,
-  });
-  const cracks = [
-    { x: -18, z: -40, sx: 0.6, sz: 30, r: 0.15 }, { x: 10, z: -25, sx: 0.5, sz: 24, r: -0.1 },
-    { x: -6, z: -55, sx: 0.4, sz: 20, r: 0.3 },   { x: 20, z: -50, sx: 0.35, sz: 18, r: -0.2 },
-    { x: -14, z: 0, sx: 0.5, sz: 22, r: 0.05 },    { x: 5, z: -65, sx: 0.4, sz: 14, r: -0.35 },
-    { x: -2, z: -35, sx: 0.3, sz: 16, r: 0.4 },    { x: 14, z: -10, sx: 0.35, sz: 12, r: -0.25 },
-  ];
-  for (const c of cracks) {
-    const crack = new THREE.Mesh(new THREE.PlaneGeometry(c.sx, c.sz), lavaCrackMat);
-    crack.rotation.x = -Math.PI / 2;
-    crack.rotation.z = c.r;
-    crack.position.set(c.x, 0.04, c.z);
-    scene.add(crack);
-  }
-
   // ── Lava pools with animated glow ──
   const lavaPoolTex = makeLavaTexture(128);
   const poolSpots = [
-    { x: -28, z: -30, r: 5 },  { x: 29, z: -50, r: 4.5 },
-    { x: -30, z: -60, r: 3.8 }, { x: 28, z: -10, r: 4.5 },
-    { x: -29, z: 5, r: 4 },     { x: 30, z: -75, r: 3.5 },
+    { x: -35, z: -30, r: 5 },  { x: 36, z: -50, r: 4.5 },
+    { x: -37, z: -60, r: 3.8 }, { x: 35, z: -10, r: 4.5 },
+    { x: -36, z: 5, r: 4 },     { x: 37, z: -75, r: 3.5 },
   ];
   for (const p of poolSpots) {
     const poolMat = new THREE.MeshStandardMaterial({
@@ -1097,6 +1066,7 @@ function togglePause() {
 
 function toggleMute() {
   muted = !muted;
+  localStorage.setItem('goons-muted', muted);
   setSfxMuted(muted);
   if (bgm) bgm.muted = muted;
   dom.muteBtn.textContent = muted ? '🔇' : '🔊';
